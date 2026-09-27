@@ -20,10 +20,12 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      - name: Generate Default Debug Keystore
+      - name: Generate Keystore in App Folder
         run: |
           mkdir -p ~/.android
           keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+          cp ~/.android/debug.keystore app/debug.keystore 2>/dev/null || true
+          cp ~/.android/debug.keystore debug.keystore 2>/dev/null || true
 
       - name: Grant execute permission for gradlew
         run: |
@@ -35,7 +37,7 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug -x validateSigningDebug --no-daemon -Djava.awt.headless=true --stacktrace
+        run: ./gradlew assembleDebug --no-daemon -Djava.awt.headless=true --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
