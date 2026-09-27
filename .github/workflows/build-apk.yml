@@ -30,7 +30,10 @@ jobs:
           fi
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        env:
+          _JAVA_OPTIONS: "-Djava.awt.headless=true"
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs=\"-Xmx2048m -Djava.awt.headless=true\""
+        run: ./gradlew assembleDebug --stacktrace -Djava.awt.headless=true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
