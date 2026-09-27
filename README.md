@@ -1,0 +1,30 @@
+# 📄 DocuFix - All-in-One PDF & Image Utility Tool
+
+**DocuFix** ek fast, secure aur offline Android app hai. Is app ki madad se aap apni PDFs aur Photos ko bina kisi internet connection ke aaram se convert, compress aur edit kar sakte hain. Aapki files poori tarah safe rehti hain kyunki sara process direct aapke phone ke andar hota hai.
+
+---
+
+🚀 Download APK (ऐप डाउनलोड करें)
+
+Aap niche diye gaye link par click karke latest Android APK direct download kar sakte hain:
+
+👉 [Download DocuFix v1.0.0 APK](https://github.com/amirhasandiwan/amir-docufix19/releases/download/v1.0.0/app-debug.apk)
+
+---
+
+✨ Features (मुख्य विशेषताएं)
+
+ 🔄 JPG to PDF (फोटो से पीडीएफ बनाएं):
+ 🖼️ PDF to JPG (पीडीएफ से फोटो निकालें):
+ 🎯 Target File Size Compression (फाइल साइज कम करें):
+ ✂️ PDF Merge & Split (पेज जोड़ें और हटाएं):
+ 🔒 100% Offline & Private (सुरक्षित और बिना इंटरनेट):
+  * Kisi server upload ki zaroorat nahi; aapka personal data aapke phone me hi rehta hai.
+
+---
+
+## 🛠️ Tech Stack
+
+* **Language:** Kotlin
+* **Framework:** Android Jetpack Compose & Gradle
+* **Auto-Build:** GitHub Actions (CI/CD)
