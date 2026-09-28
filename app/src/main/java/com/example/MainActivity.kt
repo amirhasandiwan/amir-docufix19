@@ -16,14 +16,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallMerge
 import androidx.compose.material.icons.filled.Compress
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.ViewCarousel
-import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -44,14 +41,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.components.LoadingOverlay
 import com.example.ui.screens.CompressorScreen
-import com.example.ui.screens.EnhancerScreen
-import com.example.ui.screens.HistoryScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.JpgToPdfScreen
 import com.example.ui.screens.MergeSplitScreen
-import com.example.ui.screens.PdfEditorScreen
 import com.example.ui.screens.PdfToJpgScreen
 import com.example.ui.screens.SecurityScreen
+import com.example.ui.screens.TextToPdfScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AppDestination
 import com.example.ui.viewmodel.PdfUtilViewModel
@@ -75,7 +70,6 @@ fun MainAppContent(viewModel: PdfUtilViewModel = viewModel()) {
     val progressMessage by viewModel.progressMessage.collectAsStateWithLifecycle()
     val progressRatio by viewModel.progressRatio.collectAsStateWithLifecycle()
     val statusNotification by viewModel.statusNotification.collectAsStateWithLifecycle()
-    val historyList by viewModel.historyList.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -121,20 +115,8 @@ fun MainAppContent(viewModel: PdfUtilViewModel = viewModel()) {
                     NavigationRailItem(
                         selected = destination == AppDestination.COMPRESSOR,
                         onClick = { viewModel.navigateTo(AppDestination.COMPRESSOR) },
-                        icon = { Icon(Icons.Default.Compress, contentDescription = "Compress") },
-                        label = { Text("Compress") }
-                    )
-                    NavigationRailItem(
-                        selected = destination == AppDestination.PAGE_EDITOR,
-                        onClick = { viewModel.navigateTo(AppDestination.PAGE_EDITOR) },
-                        icon = { Icon(Icons.Default.ViewCarousel, contentDescription = "Editor") },
-                        label = { Text("Editor") }
-                    )
-                    NavigationRailItem(
-                        selected = destination == AppDestination.ENHANCER,
-                        onClick = { viewModel.navigateTo(AppDestination.ENHANCER) },
-                        icon = { Icon(Icons.Default.AutoAwesome, contentDescription = "Enhance") },
-                        label = { Text("Enhance") }
+                        icon = { Icon(Icons.Default.Compress, contentDescription = "Resize") },
+                        label = { Text("Resize") }
                     )
                     NavigationRailItem(
                         selected = destination == AppDestination.MERGE_SPLIT,
@@ -148,16 +130,10 @@ fun MainAppContent(viewModel: PdfUtilViewModel = viewModel()) {
                         icon = { Icon(Icons.Default.Lock, contentDescription = "Security") },
                         label = { Text("Lock/Unlock") }
                     )
-                    NavigationRailItem(
-                        selected = destination == AppDestination.HISTORY,
-                        onClick = { viewModel.navigateTo(AppDestination.HISTORY) },
-                        icon = { Icon(Icons.Default.History, contentDescription = "Files") },
-                        label = { Text("Files") }
-                    )
                 }
 
                 Box(modifier = Modifier.weight(1f)) {
-                    ScreenSwitcher(destination, viewModel, historyList)
+                    ScreenSwitcher(destination, viewModel)
                 }
             }
         } else {
@@ -191,28 +167,14 @@ fun MainAppContent(viewModel: PdfUtilViewModel = viewModel()) {
                         NavigationBarItem(
                             selected = destination == AppDestination.COMPRESSOR,
                             onClick = { viewModel.navigateTo(AppDestination.COMPRESSOR) },
-                            icon = { Icon(Icons.Default.Compress, contentDescription = "Compress") },
-                            label = { Text("Compress") }
+                            icon = { Icon(Icons.Default.Compress, contentDescription = "Resize") },
+                            label = { Text("Resize") }
                         )
                         NavigationBarItem(
-                            selected = destination == AppDestination.HISTORY,
-                            onClick = { viewModel.navigateTo(AppDestination.HISTORY) },
-                            icon = {
-                                if (historyList.isNotEmpty()) {
-                                    BadgedBox(
-                                        badge = {
-                                            Badge {
-                                                Text("${historyList.size}")
-                                            }
-                                        }
-                                    ) {
-                                        Icon(Icons.Default.History, contentDescription = "Recent Files")
-                                    }
-                                } else {
-                                    Icon(Icons.Default.History, contentDescription = "Recent Files")
-                                }
-                            },
-                            label = { Text("Recent Files") }
+                            selected = destination == AppDestination.SECURITY,
+                            onClick = { viewModel.navigateTo(AppDestination.SECURITY) },
+                            icon = { Icon(Icons.Default.Lock, contentDescription = "Security") },
+                            label = { Text("Security") }
                         )
                     }
                 }
@@ -222,7 +184,7 @@ fun MainAppContent(viewModel: PdfUtilViewModel = viewModel()) {
                         .fillMaxSize()
                         .padding(innerPadding)
                 ) {
-                    ScreenSwitcher(destination, viewModel, historyList)
+                    ScreenSwitcher(destination, viewModel)
                 }
             }
         }
@@ -239,8 +201,7 @@ fun MainAppContent(viewModel: PdfUtilViewModel = viewModel()) {
 @Composable
 fun ScreenSwitcher(
     destination: AppDestination,
-    viewModel: PdfUtilViewModel,
-    historyList: List<com.example.data.local.HistoryEntity>
+    viewModel: PdfUtilViewModel
 ) {
     val selectedImages by viewModel.selectedImages.collectAsStateWithLifecycle()
     val jpgFormat by viewModel.jpgToPdfPageFormat.collectAsStateWithLifecycle()
@@ -267,17 +228,9 @@ fun ScreenSwitcher(
     val pdfCompressPreset by viewModel.selectedPdfCompressPreset.collectAsStateWithLifecycle()
     val compressedPdf by viewModel.compressedPdfResult.collectAsStateWithLifecycle()
 
-    val editorPdfFile by viewModel.editorPdfFile.collectAsStateWithLifecycle()
-    val editorPageThumbs by viewModel.editorPageThumbnails.collectAsStateWithLifecycle()
-    val editorPagesPlan by viewModel.editorPagesPlan.collectAsStateWithLifecycle()
-    val editedPdfResult by viewModel.editedPdfResult.collectAsStateWithLifecycle()
-
     when (destination) {
         AppDestination.HOME -> HomeScreen(
-            historyList = historyList,
-            onNavigate = { viewModel.navigateTo(it) },
-            onDeleteHistory = { viewModel.deleteHistoryItem(it) },
-            onSeedSampleHistory = { viewModel.seedSampleHistory() }
+            onNavigate = { viewModel.navigateTo(it) }
         )
         AppDestination.JPG_TO_PDF -> JpgToPdfScreen(
             viewModel = viewModel,
@@ -300,33 +253,6 @@ fun ScreenSwitcher(
         )
         AppDestination.COMPRESSOR -> CompressorScreen(
             viewModel = viewModel,
-            currentTab = compressorTab,
-            sourceBitmap = sourceBitmap,
-            sourceImageOriginalSize = sourceImgSize,
-            imageQuality = imgQuality,
-            imageScale = imgScale,
-            imageFormat = imgFormat,
-            compressedImageResult = compressedImg,
-            sourcePdfFile = sourcePdfForCompress,
-            pdfCompressPreset = pdfCompressPreset,
-            compressedPdfResult = compressedPdf,
-            onBack = { viewModel.navigateTo(AppDestination.HOME) }
-        )
-        AppDestination.PAGE_EDITOR -> PdfEditorScreen(
-            viewModel = viewModel,
-            sourcePdfFile = editorPdfFile,
-            pageThumbnails = editorPageThumbs,
-            pagesPlan = editorPagesPlan,
-            editedResultFile = editedPdfResult,
-            onBack = { viewModel.navigateTo(AppDestination.HOME) }
-        )
-        AppDestination.HISTORY -> HistoryScreen(
-            viewModel = viewModel,
-            historyList = historyList,
-            onBack = { viewModel.navigateTo(AppDestination.HOME) }
-        )
-        AppDestination.ENHANCER -> EnhancerScreen(
-            viewModel = viewModel,
             onBack = { viewModel.navigateTo(AppDestination.HOME) }
         )
         AppDestination.MERGE_SPLIT -> MergeSplitScreen(
@@ -334,6 +260,10 @@ fun ScreenSwitcher(
             onBack = { viewModel.navigateTo(AppDestination.HOME) }
         )
         AppDestination.SECURITY -> SecurityScreen(
+            viewModel = viewModel,
+            onBack = { viewModel.navigateTo(AppDestination.HOME) }
+        )
+        AppDestination.TEXT_TO_PDF -> TextToPdfScreen(
             viewModel = viewModel,
             onBack = { viewModel.navigateTo(AppDestination.HOME) }
         )

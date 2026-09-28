@@ -1,11 +1,9 @@
 package com.example.ui.screens
 
-import android.graphics.Bitmap
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,13 +25,10 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
-import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallMerge
 import androidx.compose.material.icons.filled.CallSplit
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
@@ -71,7 +66,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.components.AppHeader
-import com.example.ui.theme.AccentAmber
 import com.example.ui.theme.AccentCoral
 import com.example.ui.theme.PrimaryIndigo
 import com.example.ui.theme.SecondaryTeal
@@ -79,7 +73,6 @@ import com.example.ui.theme.SuccessGreen
 import com.example.ui.viewmodel.PdfUtilViewModel
 import com.example.utils.FileOpener
 import com.example.utils.ImageEngine
-import java.io.File
 
 @Composable
 fun MergeSplitScreen(
@@ -136,13 +129,15 @@ fun MergeSplitScreen(
                 selected = currentTab == PdfUtilViewModel.MergeSplitTab.MERGE,
                 onClick = { viewModel.setMergeSplitTab(PdfUtilViewModel.MergeSplitTab.MERGE) },
                 icon = { Icon(Icons.Default.CallMerge, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                text = { Text("Merge PDFs", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                text = { Text("Merge PDFs", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                modifier = Modifier.testTag("tab_merge_pdf")
             )
             Tab(
                 selected = currentTab == PdfUtilViewModel.MergeSplitTab.SPLIT,
                 onClick = { viewModel.setMergeSplitTab(PdfUtilViewModel.MergeSplitTab.SPLIT) },
                 icon = { Icon(Icons.Default.CallSplit, contentDescription = null, modifier = Modifier.size(18.dp)) },
-                text = { Text("Split PDF", fontWeight = FontWeight.Bold, fontSize = 13.sp) }
+                text = { Text("Split PDF", fontWeight = FontWeight.Bold, fontSize = 13.sp) },
+                modifier = Modifier.testTag("tab_split_pdf")
             )
         }
 
@@ -155,84 +150,27 @@ fun MergeSplitScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Action Buttons Row
+                // Upload PDFs Button
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Button(
+                        onClick = {
+                            pickMultiplePdfsLauncher.launch(arrayOf("application/pdf"))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("btn_upload_pdfs_merge"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                     ) {
-                        Button(
-                            onClick = {
-                                pickMultiplePdfsLauncher.launch(arrayOf("application/pdf"))
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("btn_pick_merge_pdfs"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
-                        ) {
-                            Icon(Icons.Default.PictureAsPdf, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Add PDFs")
-                        }
-
-                        OutlinedButton(
-                            onClick = { viewModel.loadSamplePdfsForMerge() },
-                            modifier = Modifier.testTag("btn_load_sample_merge_pdfs"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentAmber)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Load Samples (3)")
-                        }
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Upload PDFs", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     }
                 }
 
-                if (mergePdfList.isEmpty()) {
-                    item {
-                        Card(
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .padding(24.dp)
-                                    .fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(CircleShape)
-                                        .background(PrimaryIndigo.copy(alpha = 0.12f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CallMerge,
-                                        contentDescription = null,
-                                        tint = PrimaryIndigo,
-                                        modifier = Modifier.size(36.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(14.dp))
-                                Text(
-                                    text = "Offline PDF Merger",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "Select two or more PDF documents to concatenate them into a single high-quality document in exact sequence.",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    lineHeight = 18.sp
-                                )
-                            }
-                        }
-                    }
-                } else {
-                    // Header with count & Clear
+                if (mergePdfList.isNotEmpty()) {
+                    // Header with count & Clear All
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -240,10 +178,11 @@ fun MergeSplitScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "Selected Documents (${mergePdfList.size})",
+                                text = "Selected PDFs (${mergePdfList.size})",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp
                             )
+
                             Text(
                                 text = "Clear All",
                                 color = AccentCoral,
@@ -256,30 +195,31 @@ fun MergeSplitScreen(
                         }
                     }
 
-                    // Selected PDFs List
+                    // PDF Items List
                     itemsIndexed(mergePdfList) { index, file ->
                         Card(
-                            shape = RoundedCornerShape(14.dp),
+                            shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Row(
-                                modifier = Modifier.padding(12.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Index Badge
                                 Box(
                                     modifier = Modifier
-                                        .size(32.dp)
+                                        .size(34.dp)
                                         .clip(CircleShape)
-                                        .background(PrimaryIndigo),
+                                        .background(PrimaryIndigo.copy(alpha = 0.15f)),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         text = "${index + 1}",
-                                        color = MaterialTheme.colorScheme.onPrimary,
                                         fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp
+                                        fontSize = 13.sp,
+                                        color = PrimaryIndigo
                                     )
                                 }
 
@@ -300,28 +240,25 @@ fun MergeSplitScreen(
                                     )
                                 }
 
-                                // Move Up
                                 IconButton(
                                     onClick = { viewModel.movePdfInMerge(index, index - 1) },
                                     enabled = index > 0,
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(30.dp)
                                 ) {
                                     Icon(Icons.Default.ArrowUpward, contentDescription = "Move Up", modifier = Modifier.size(18.dp))
                                 }
 
-                                // Move Down
                                 IconButton(
                                     onClick = { viewModel.movePdfInMerge(index, index + 1) },
                                     enabled = index < mergePdfList.size - 1,
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(30.dp)
                                 ) {
                                     Icon(Icons.Default.ArrowDownward, contentDescription = "Move Down", modifier = Modifier.size(18.dp))
                                 }
 
-                                // Remove
                                 IconButton(
                                     onClick = { viewModel.removePdfFromMerge(index) },
-                                    modifier = Modifier.size(32.dp)
+                                    modifier = Modifier.size(30.dp)
                                 ) {
                                     Icon(Icons.Default.Delete, contentDescription = "Remove", tint = AccentCoral, modifier = Modifier.size(18.dp))
                                 }
@@ -398,7 +335,7 @@ fun MergeSplitScreen(
                                             fontSize = 14.sp
                                         )
                                         Text(
-                                            text = "Unified Document • ${ImageEngine.formatFileSize(mergedPdfResult!!.length())}",
+                                            text = "Merged PDF • ${ImageEngine.formatFileSize(mergedPdfResult!!.length())}",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.SemiBold,
                                             color = SuccessGreen
@@ -451,83 +388,26 @@ fun MergeSplitScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Action Buttons Row
+                // Upload PDF Button
                 item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    Button(
+                        onClick = {
+                            pickSinglePdfLauncher.launch(arrayOf("application/pdf"))
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(50.dp)
+                            .testTag("btn_upload_pdf_split"),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                     ) {
-                        Button(
-                            onClick = {
-                                pickSinglePdfLauncher.launch(arrayOf("application/pdf"))
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .testTag("btn_pick_split_pdf"),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
-                        ) {
-                            Icon(Icons.Default.PictureAsPdf, contentDescription = null)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Pick PDF")
-                        }
-
-                        OutlinedButton(
-                            onClick = { viewModel.loadSamplePdfForSplit() },
-                            modifier = Modifier.testTag("btn_load_sample_split_pdf"),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = AccentAmber)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Sample (3 Pages)")
-                        }
+                        Icon(Icons.Default.PictureAsPdf, contentDescription = null)
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Upload PDF", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                     }
                 }
 
-                if (splitSourcePdf == null) {
-                    item {
-                        Card(
-                            shape = RoundedCornerShape(18.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .padding(24.dp)
-                                    .fillMaxWidth(),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(CircleShape)
-                                        .background(SecondaryTeal.copy(alpha = 0.15f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.CallSplit,
-                                        contentDescription = null,
-                                        tint = SecondaryTeal,
-                                        modifier = Modifier.size(36.dp)
-                                    )
-                                }
-                                Spacer(modifier = Modifier.height(14.dp))
-                                Text(
-                                    text = "Offline PDF Splitter",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 16.sp
-                                )
-                                Spacer(modifier = Modifier.height(6.dp))
-                                Text(
-                                    text = "Extract specific pages from any PDF, or split all pages into separate standalone single-page PDF files.",
-                                    fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    lineHeight = 18.sp
-                                )
-                            }
-                        }
-                    }
-                } else {
+                if (splitSourcePdf != null) {
                     // Document Overview Card
                     item {
                         Card(
@@ -541,7 +421,7 @@ fun MergeSplitScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(54.dp)
+                                        .size(50.dp)
                                         .clip(CircleShape)
                                         .background(SecondaryTeal.copy(alpha = 0.15f)),
                                     contentAlignment = Alignment.Center
@@ -562,6 +442,10 @@ fun MergeSplitScreen(
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
+                                }
+
+                                IconButton(onClick = { viewModel.clearSplitPdf() }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Clear", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                                 }
                             }
                         }

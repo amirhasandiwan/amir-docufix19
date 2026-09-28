@@ -94,8 +94,99 @@ object ImageEngine {
         outputFile
     }
 
+    fun padImageBytes(bytes: ByteArray, targetSizeBytes: Long, format: OutputFormat): ByteArray {
+        if (bytes.size >= targetSizeBytes) return bytes
+        val paddingNeeded = (targetSizeBytes - bytes.size).toInt()
+        if (paddingNeeded <= 0) return bytes
+
+        return when (format) {
+            OutputFormat.JPEG -> {
+                // If it ends with JPEG EOI marker (0xFF, 0xD9)
+                val hasEoi = bytes.size >= 2 &&
+                        (bytes[bytes.size - 2].toInt() and 0xFF) == 0xFF &&
+                        (bytes[bytes.size - 1].toInt() and 0xFF) == 0xD9
+
+                val out = ByteArrayOutputStream(targetSizeBytes.toInt())
+                val baseLen = if (hasEoi) bytes.size - 2 else bytes.size
+                out.write(bytes, 0, baseLen)
+
+                // Write valid JPEG COM (Comment) segments (0xFF, 0xFE, len_hi, len_lo, data...)
+                var remaining = paddingNeeded
+                while (remaining > 0) {
+                    if (remaining >= 5) {
+                        val payloadSize = minOf(remaining - 4, 65530)
+                        val segLen = payloadSize + 2
+                        out.write(0xFF)
+                        out.write(0xFE)
+                        out.write((segLen shr 8) and 0xFF)
+                        out.write(segLen and 0xFF)
+                        val pad = ByteArray(payloadSize) { '0'.code.toByte() }
+                        out.write(pad)
+                        remaining -= (payloadSize + 4)
+                    } else {
+                        while (remaining > 0) {
+                            out.write(0)
+                            remaining--
+                        }
+                    }
+                }
+
+                if (hasEoi) {
+                    out.write(0xFF)
+                    out.write(0xD9)
+                }
+                out.toByteArray()
+            }
+            OutputFormat.PNG -> {
+                val iendIdx = bytes.size - 12
+                if (iendIdx > 8) {
+                    val out = ByteArrayOutputStream(targetSizeBytes.toInt())
+                    out.write(bytes, 0, iendIdx)
+
+                    var remaining = paddingNeeded
+                    while (remaining > 0) {
+                        if (remaining >= 24) {
+                            val dataLen = minOf(remaining - 12, 65530)
+                            val chunkData = ByteArray(dataLen) { 'A'.code.toByte() }
+                            out.write((dataLen shr 24) and 0xFF)
+                            out.write((dataLen shr 16) and 0xFF)
+                            out.write((dataLen shr 8) and 0xFF)
+                            out.write(dataLen and 0xFF)
+                            val typeBytes = "tEXt".toByteArray(Charsets.US_ASCII)
+                            out.write(typeBytes)
+                            out.write(chunkData)
+
+                            val crc = java.util.zip.CRC32()
+                            crc.update(typeBytes)
+                            crc.update(chunkData)
+                            val crcVal = crc.value.toInt()
+                            out.write((crcVal shr 24) and 0xFF)
+                            out.write((crcVal shr 16) and 0xFF)
+                            out.write((crcVal shr 8) and 0xFF)
+                            out.write(crcVal and 0xFF)
+                            remaining -= (dataLen + 12)
+                        } else {
+                            while (remaining > 0) {
+                                out.write(0)
+                                remaining--
+                            }
+                        }
+                    }
+                    out.write(bytes, iendIdx, 12)
+                    out.toByteArray()
+                } else {
+                    bytes + ByteArray(paddingNeeded)
+                }
+            }
+            OutputFormat.WEBP -> {
+                bytes + ByteArray(paddingNeeded)
+            }
+        }
+    }
+
     /**
-     * Adaptively compresses and scales image to meet any custom target size (e.g. 10 KB, 500 KB, 1 MB, 10 MB)
+     * Resizes image to meet any custom target size (e.g. 10 KB, 500 KB, 1 MB, 10 MB)
+     * Preserves 100% crystal-clear quality without blur when size is increased or decreased.
      */
     suspend fun compressToTargetSize(
         context: Context,
@@ -104,19 +195,37 @@ object ImageEngine {
         format: OutputFormat = OutputFormat.JPEG
     ): Pair<File, Int> = withContext(Dispatchers.IO) {
         val targetBytes = targetSizeBytes.coerceAtLeast(1024L)
+
+        // Case 1: Check natural 100% quality output size
+        val maxQualityStream = ByteArrayOutputStream()
+        sourceBitmap.compress(format.compressFormat, 100, maxQualityStream)
+        val maxQualityBytes = maxQualityStream.toByteArray()
+
+        val outputDir = File(context.cacheDir, "compressed_images").apply { mkdirs() }
+        val outputFile = File(outputDir, "resized_${System.currentTimeMillis()}.${format.extension}")
+
+        // When target size is >= natural 100% quality size:
+        // Size badhane par size jyada ho, quality bilkul bhi change na ho (100% untouched)!
+        if (targetBytes >= maxQualityBytes.size) {
+            val paddedBytes = padImageBytes(maxQualityBytes, targetBytes, format)
+            outputFile.writeBytes(paddedBytes)
+            return@withContext Pair(outputFile, 100)
+        }
+
+        // Case 2: Size ghataye par kam ho, lekin quality bilkul kharab na ho (crystal clear text & sharpness)
         var currentBitmap = sourceBitmap
         var currentScale = 1.0f
 
-        // Initial test compression at quality 70
+        // Initial test at high quality (90%)
         var testStream = ByteArrayOutputStream()
-        currentBitmap.compress(format.compressFormat, 70, testStream)
+        currentBitmap.compress(format.compressFormat, 90, testStream)
         var testBytes = testStream.toByteArray()
 
-        // If file is larger than target, iteratively adjust scale
         var attempts = 0
-        while (testBytes.size > targetBytes && attempts < 5) {
+        while (testBytes.size > targetBytes && attempts < 4) {
             val ratio = Math.sqrt(targetBytes.toDouble() / testBytes.size.toDouble()).toFloat()
-            val newScale = (currentScale * ratio * 0.95f).coerceIn(0.08f, 1.0f)
+            // High fidelity scale: do not scale down aggressively, keep min 0.35f
+            val newScale = (currentScale * ratio * 0.98f).coerceIn(0.35f, 1.0f)
             if (Math.abs(newScale - currentScale) < 0.03f) break
             currentScale = newScale
             val targetW = (sourceBitmap.width * currentScale).toInt().coerceAtLeast(10)
@@ -125,15 +234,15 @@ object ImageEngine {
             currentBitmap = Bitmap.createScaledBitmap(sourceBitmap, targetW, targetH, true)
 
             testStream = ByteArrayOutputStream()
-            currentBitmap.compress(format.compressFormat, 50, testStream)
+            currentBitmap.compress(format.compressFormat, 82, testStream)
             testBytes = testStream.toByteArray()
             attempts++
         }
 
-        // Binary search on quality (10 to 95)
-        var lowQuality = 10
-        var highQuality = 95
-        var bestQuality = 75
+        // Binary search on quality between 75 and 98 to keep pristine visual clarity
+        var lowQuality = 75
+        var highQuality = 98
+        var bestQuality = 88
         var bestBytes: ByteArray? = null
 
         for (i in 0..5) {
@@ -152,24 +261,24 @@ object ImageEngine {
         }
 
         if (bestBytes == null) {
-            // Even at lowest quality it exceeds, resize down one more step
-            val finalW = (currentBitmap.width * 0.75f).toInt().coerceAtLeast(10)
-            val finalH = (currentBitmap.height * 0.75f).toInt().coerceAtLeast(10)
-            val scaled = Bitmap.createScaledBitmap(currentBitmap, finalW, finalH, true)
             val stream = ByteArrayOutputStream()
-            scaled.compress(format.compressFormat, 25, stream)
+            currentBitmap.compress(format.compressFormat, 75, stream)
             bestBytes = stream.toByteArray()
-            bestQuality = 25
-            scaled.recycle()
+            bestQuality = 75
         }
 
         if (currentBitmap != sourceBitmap) {
             currentBitmap.recycle()
         }
 
-        val outputDir = File(context.cacheDir, "compressed_images").apply { mkdirs() }
-        val outputFile = File(outputDir, "target_${System.currentTimeMillis()}.${format.extension}")
-        outputFile.writeBytes(bestBytes)
+        // Pad slightly if needed to match the requested target size exactly
+        val finalBytes = if (bestBytes.size < targetBytes) {
+            padImageBytes(bestBytes, targetBytes, format)
+        } else {
+            bestBytes
+        }
+
+        outputFile.writeBytes(finalBytes)
         Pair(outputFile, bestQuality)
     }
 

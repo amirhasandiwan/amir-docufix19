@@ -1,6 +1,6 @@
 {
   "name": "Amir DocuFix",
-  "description": "Offline PDF/JPG utility: JPG to PDF, PDF to JPG, compressor, editor, size enhancer, merge/split, and password lock/unlock encryption.",
+  "description": "Offline PDF/JPG utility: JPG to PDF, PDF to JPG, compressor, size enhancer, merge/split, and password lock/unlock encryption.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

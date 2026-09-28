@@ -5,19 +5,14 @@ import android.graphics.Bitmap
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.local.AppDatabase
-import com.example.data.local.HistoryEntity
-import com.example.data.repository.HistoryRepository
+import com.example.data.model.PdfExportSecurityConfig
 import com.example.utils.FileOpener
 import com.example.utils.ImageEngine
 import com.example.utils.PdfEngine
 import com.example.utils.SampleFilesProvider
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
@@ -27,21 +22,12 @@ enum class AppDestination {
     JPG_TO_PDF,
     PDF_TO_JPG,
     COMPRESSOR,
-    PAGE_EDITOR,
-    ENHANCER,
     MERGE_SPLIT,
     SECURITY,
-    HISTORY
+    TEXT_TO_PDF
 }
 
 class PdfUtilViewModel(application: Application) : AndroidViewModel(application) {
-
-    private val repository: HistoryRepository
-
-    init {
-        val db = AppDatabase.getDatabase(application)
-        repository = HistoryRepository(db.historyDao())
-    }
 
     // Navigation & General UI State
     private val _currentDestination = MutableStateFlow(AppDestination.HOME)
@@ -58,29 +44,6 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
 
     private val _statusNotification = MutableStateFlow<String?>(null)
     val statusNotification: StateFlow<String?> = _statusNotification.asStateFlow()
-
-    // Room History
-    val historyList: StateFlow<List<HistoryEntity>> = repository.allHistory
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = emptyList()
-        )
-
-    val totalCount: StateFlow<Int> = repository.totalCount
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = 0
-        )
-
-    val totalSizeBytes: StateFlow<Long> = repository.totalSizeBytes
-        .map { it ?: 0L }
-        .stateIn(
-            scope = viewModelScope,
-            started = SharingStarted.WhileSubscribed(5000),
-            initialValue = 0L
-        )
 
     fun navigateTo(destination: AppDestination) {
         _currentDestination.value = destination
@@ -105,14 +68,27 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
     private val _jpgToPdfMargin = MutableStateFlow(15) // points
     val jpgToPdfMargin: StateFlow<Int> = _jpgToPdfMargin.asStateFlow()
 
-    private val _jpgToPdfQuality = MutableStateFlow(85) // %
+    private val _jpgToPdfQuality = MutableStateFlow(100) // 100% Original Quality
     val jpgToPdfQuality: StateFlow<Int> = _jpgToPdfQuality.asStateFlow()
+
+    private val _jpgToPdfSecurityConfig = MutableStateFlow(PdfExportSecurityConfig())
+    val jpgToPdfSecurityConfig: StateFlow<PdfExportSecurityConfig> = _jpgToPdfSecurityConfig.asStateFlow()
 
     private val _generatedPdfResult = MutableStateFlow<File?>(null)
     val generatedPdfResult: StateFlow<File?> = _generatedPdfResult.asStateFlow()
 
+    fun setJpgToPdfSecurityConfig(config: PdfExportSecurityConfig) {
+        _jpgToPdfSecurityConfig.value = config
+    }
+
     fun addImageUris(uris: List<Uri>) {
-        _selectedImages.value = _selectedImages.value + uris
+        val cr = getApplication<Application>().contentResolver
+        val filtered = uris.filter { uri ->
+            val type = cr.getType(uri)?.lowercase() ?: ""
+            val name = uri.lastPathSegment?.lowercase() ?: ""
+            type.contains("jpeg") || type.contains("jpg") || name.endsWith(".jpg") || name.endsWith(".jpeg") || type.startsWith("image/")
+        }
+        _selectedImages.value = _selectedImages.value + (if (filtered.isNotEmpty()) filtered else uris)
     }
 
     fun removeImageAt(index: Int) {
@@ -158,13 +134,19 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
         val uris = _selectedImages.value
         if (uris.isEmpty()) return
 
+        val security = _jpgToPdfSecurityConfig.value
+        if (security.isProtectionEnabled && !security.isValid) {
+            _statusNotification.value = security.errorMessage ?: "Please verify password configuration"
+            return
+        }
+
         viewModelScope.launch {
             _isLoading.value = true
             _progressRatio.value = 0f
             _progressMessage.value = "Converting ${uris.size} images to PDF..."
 
             try {
-                val pdfFile = PdfEngine.convertImagesToPdf(
+                val basePdfFile = PdfEngine.convertImagesToPdf(
                     context = getApplication(),
                     imageUris = uris,
                     pageFormat = _jpgToPdfPageFormat.value,
@@ -178,21 +160,31 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                     }
                 )
 
-                _generatedPdfResult.value = pdfFile
-
-                // Save to Room
-                repository.insert(
-                    HistoryEntity(
-                        title = pdfFile.name,
-                        filePath = pdfFile.absolutePath,
-                        fileType = "PDF",
-                        operationType = "JPG to PDF",
-                        sizeBytes = pdfFile.length(),
-                        pageCount = uris.size
+                val finalPdfFile = if (security.isProtectionEnabled && security.userPassword.isNotEmpty()) {
+                    _progressMessage.value = "Applying AES encryption & password lock..."
+                    val perms = PdfEngine.PdfPermissions(
+                        canPrint = security.canPrint,
+                        canModify = security.canModify,
+                        canExtractContent = security.canExtractContent,
+                        canModifyAnnotations = security.canModifyAnnotations
                     )
-                )
+                    PdfEngine.encryptPdf(
+                        context = getApplication(),
+                        inputPdf = basePdfFile,
+                        userPassword = security.userPassword,
+                        ownerPassword = security.ownerPassword.ifEmpty { security.userPassword },
+                        permissions = perms,
+                        keyLength = security.keyLength,
+                        outputFileName = "Doc_${System.currentTimeMillis()}_protected.pdf"
+                    )
+                } else {
+                    basePdfFile
+                }
 
-                _statusNotification.value = "Successfully generated ${pdfFile.name} (${ImageEngine.formatFileSize(pdfFile.length())})"
+                _generatedPdfResult.value = finalPdfFile
+
+                val badge = if (security.isProtectionEnabled) " 🔒 [Encrypted]" else ""
+                _statusNotification.value = "Successfully generated ${finalPdfFile.name}$badge (${ImageEngine.formatFileSize(finalPdfFile.length())})"
             } catch (e: Exception) {
                 e.printStackTrace()
                 _statusNotification.value = "Error converting images: ${e.localizedMessage}"
@@ -214,7 +206,7 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
     private val _pdfToJpgFormat = MutableStateFlow(ImageEngine.OutputFormat.JPEG)
     val pdfToJpgFormat: StateFlow<ImageEngine.OutputFormat> = _pdfToJpgFormat.asStateFlow()
 
-    private val _pdfToJpgDpiScale = MutableStateFlow(2.0f) // 144 DPI
+    private val _pdfToJpgDpiScale = MutableStateFlow(4.167f) // 300 DPI (100% Original Print Fidelity)
     val pdfToJpgDpiScale: StateFlow<Float> = _pdfToJpgDpiScale.asStateFlow()
 
     private val _extractedImagesResult = MutableStateFlow<List<File>>(emptyList())
@@ -276,29 +268,16 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                     pdfFile = file,
                     format = _pdfToJpgFormat.value,
                     dpiScale = _pdfToJpgDpiScale.value,
+                    quality = 100,
                     onProgress = { current, total ->
                         _progressRatio.value = current.toFloat() / total.toFloat()
-                        _progressMessage.value = "Rendering page $current of $total..."
+                        _progressMessage.value = "Rendering page $current of $total (100% Original Quality)..."
                     }
                 )
 
                 _extractedImagesResult.value = images
 
-                if (images.isNotEmpty()) {
-                    val totalSize = images.sumOf { it.length() }
-                    repository.insert(
-                        HistoryEntity(
-                            title = "${file.nameWithoutExtension}_pages",
-                            filePath = images.first().absolutePath,
-                            fileType = _pdfToJpgFormat.value.extension.uppercase(),
-                            operationType = "PDF to JPG",
-                            sizeBytes = totalSize,
-                            pageCount = images.size
-                        )
-                    )
-                }
-
-                _statusNotification.value = "Extracted ${images.size} pages as ${_pdfToJpgFormat.value.extension.uppercase()}"
+                _statusNotification.value = "Extracted ${images.size} pages in 100% original quality as ${_pdfToJpgFormat.value.extension.uppercase()}"
             } catch (e: Exception) {
                 e.printStackTrace()
                 _statusNotification.value = "Failed to render PDF: ${e.localizedMessage}"
@@ -382,6 +361,12 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun clearSourceImageForCompress() {
+        _sourceImageBitmap.value = null
+        _sourceImageOriginalSize.value = 0L
+        _compressedImageResult.value = null
+    }
+
     fun loadSampleImageForCompressor() {
         viewModelScope.launch {
             val samples = SampleFilesProvider.getOrCreateSampleImages(getApplication())
@@ -424,24 +409,16 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
 
                 _compressedImageResult.value = file
 
-                repository.insert(
-                    HistoryEntity(
-                        title = file.name,
-                        filePath = file.absolutePath,
-                        fileType = _imageCompressFormat.value.extension.uppercase(),
-                        operationType = "Compressed",
-                        sizeBytes = file.length(),
-                        pageCount = 1
-                    )
-                )
-
-                val savedPercent = if (_sourceImageOriginalSize.value > 0) {
+                val isIncreased = file.length() > _sourceImageOriginalSize.value
+                val status = if (isIncreased) {
+                    "Image size increased to ${ImageEngine.formatFileSize(file.length())} (100% Quality Preserved)"
+                } else {
                     val diff = _sourceImageOriginalSize.value - file.length()
-                    val pct = (diff.toDouble() / _sourceImageOriginalSize.value.toDouble() * 100).toInt()
-                    "$pct% size reduction"
-                } else ""
+                    val pct = if (_sourceImageOriginalSize.value > 0) ((diff.toDouble() / _sourceImageOriginalSize.value.toDouble()) * 100).toInt() else 0
+                    "Image size reduced to ${ImageEngine.formatFileSize(file.length())} (${pct}% saved, Quality Preserved)"
+                }
 
-                _statusNotification.value = "Image compressed: ${ImageEngine.formatFileSize(file.length())} ($savedPercent)"
+                _statusNotification.value = status
             } catch (e: Exception) {
                 e.printStackTrace()
                 _statusNotification.value = "Error compressing image: ${e.localizedMessage}"
@@ -475,13 +452,20 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
     }
 
     enum class PdfCompressPreset(val title: String, val desc: String, val dpiScale: Float, val quality: Int) {
-        EXTREME("Extreme Compression", "Smallest size (~96 DPI, 50% Quality)", 1.33f, 50),
-        RECOMMENDED("Recommended", "Good balance (~144 DPI, 70% Quality)", 2.0f, 70),
-        HIGH_QUALITY("High Quality", "Crisp text (~200 DPI, 85% Quality)", 2.77f, 85)
+        EXTREME("Compact Size", "Clear text (~144 DPI, 80% Quality)", 2.0f, 80),
+        RECOMMENDED("Recommended", "Sharp print fidelity (~180 DPI, 88% Quality)", 2.5f, 88),
+        HIGH_QUALITY("High Quality", "Maximum crystal clarity (~240 DPI, 95% Quality)", 3.33f, 95)
     }
 
     private val _selectedPdfCompressPreset = MutableStateFlow(PdfCompressPreset.RECOMMENDED)
     val selectedPdfCompressPreset: StateFlow<PdfCompressPreset> = _selectedPdfCompressPreset.asStateFlow()
+
+    private val _compressPdfSecurityConfig = MutableStateFlow(PdfExportSecurityConfig())
+    val compressPdfSecurityConfig: StateFlow<PdfExportSecurityConfig> = _compressPdfSecurityConfig.asStateFlow()
+
+    fun setCompressPdfSecurityConfig(config: PdfExportSecurityConfig) {
+        _compressPdfSecurityConfig.value = config
+    }
 
     private val _compressedPdfResult = MutableStateFlow<File?>(null)
     val compressedPdfResult: StateFlow<File?> = _compressedPdfResult.asStateFlow()
@@ -490,6 +474,11 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
 
     fun selectPdfForCompression(file: File) {
         _sourcePdfForCompress.value = file
+        _compressedPdfResult.value = null
+    }
+
+    fun clearSourcePdfForCompress() {
+        _sourcePdfForCompress.value = null
         _compressedPdfResult.value = null
     }
 
@@ -516,18 +505,24 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
     fun compressPdf() {
         val file = _sourcePdfForCompress.value ?: return
 
+        val security = _compressPdfSecurityConfig.value
+        if (security.isProtectionEnabled && !security.isValid) {
+            _statusNotification.value = security.errorMessage ?: "Please verify password configuration"
+            return
+        }
+
         viewModelScope.launch {
             _isLoading.value = true
             _progressRatio.value = 0f
             _progressMessage.value = "Optimizing and compressing PDF..."
 
             try {
-                val compressedFile: File
+                val rawCompressedFile: File
                 if (_pdfCompressMode.value == CompressSizeMode.TARGET_SIZE) {
                     val num = _pdfCustomTargetSizeText.value.toDoubleOrNull() ?: 500.0
                     val unit = _pdfCustomTargetUnit.value
                     val targetBytes = (num * unit.multiplier).toLong().coerceAtLeast(1024L)
-                    compressedFile = PdfEngine.compressPdfToTargetSize(
+                    rawCompressedFile = PdfEngine.compressPdfToTargetSize(
                         context = getApplication(),
                         inputPdf = file,
                         targetSizeBytes = targetBytes,
@@ -538,7 +533,7 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                     )
                 } else {
                     val preset = _selectedPdfCompressPreset.value
-                    compressedFile = PdfEngine.compressPdf(
+                    rawCompressedFile = PdfEngine.compressPdf(
                         context = getApplication(),
                         inputPdf = file,
                         dpiScale = preset.dpiScale,
@@ -550,434 +545,42 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                     )
                 }
 
-                _compressedPdfResult.value = compressedFile
-
-                repository.insert(
-                    HistoryEntity(
-                        title = compressedFile.name,
-                        filePath = compressedFile.absolutePath,
-                        fileType = "PDF",
-                        operationType = "Compressed",
-                        sizeBytes = compressedFile.length(),
-                        pageCount = 1
+                val finalCompressedFile = if (security.isProtectionEnabled && security.userPassword.isNotEmpty()) {
+                    _progressMessage.value = "Applying AES encryption & password lock..."
+                    val perms = PdfEngine.PdfPermissions(
+                        canPrint = security.canPrint,
+                        canModify = security.canModify,
+                        canExtractContent = security.canExtractContent,
+                        canModifyAnnotations = security.canModifyAnnotations
                     )
-                )
+                    PdfEngine.encryptPdf(
+                        context = getApplication(),
+                        inputPdf = rawCompressedFile,
+                        userPassword = security.userPassword,
+                        ownerPassword = security.ownerPassword.ifEmpty { security.userPassword },
+                        permissions = perms,
+                        keyLength = security.keyLength,
+                        outputFileName = "Compressed_${System.currentTimeMillis()}_protected.pdf"
+                    )
+                } else {
+                    rawCompressedFile
+                }
 
-                val diff = file.length() - compressedFile.length()
-                val pct = if (file.length() > 0) ((diff.toDouble() / file.length().toDouble()) * 100).toInt() else 0
-                _statusNotification.value = "PDF Compressed! New size: ${ImageEngine.formatFileSize(compressedFile.length())} (${pct}% saved)"
+                _compressedPdfResult.value = finalCompressedFile
+
+                val isIncreased = finalCompressedFile.length() > file.length()
+                val badge = if (security.isProtectionEnabled) " 🔒 [Encrypted]" else ""
+                val status = if (isIncreased) {
+                    "PDF size increased to ${ImageEngine.formatFileSize(finalCompressedFile.length())}$badge (100% Quality Preserved)"
+                } else {
+                    val diff = file.length() - finalCompressedFile.length()
+                    val pct = if (file.length() > 0) ((diff.toDouble() / file.length().toDouble()) * 100).toInt() else 0
+                    "PDF size reduced to ${ImageEngine.formatFileSize(finalCompressedFile.length())}$badge (${pct}% saved, Quality Preserved)"
+                }
+                _statusNotification.value = status
             } catch (e: Exception) {
                 e.printStackTrace()
                 _statusNotification.value = "Error compressing PDF: ${e.localizedMessage}"
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    // ==========================================
-    // 4. PDF PAGE EDITOR STATE & ACTIONS
-    // ==========================================
-    private val _editorPdfFile = MutableStateFlow<File?>(null)
-    val editorPdfFile: StateFlow<File?> = _editorPdfFile.asStateFlow()
-
-    private val _editorPageThumbnails = MutableStateFlow<List<Bitmap>>(emptyList())
-    val editorPageThumbnails: StateFlow<List<Bitmap>> = _editorPageThumbnails.asStateFlow()
-
-    private val _editorPagesPlan = MutableStateFlow<List<PdfEngine.PageEditInfo>>(emptyList())
-    val editorPagesPlan: StateFlow<List<PdfEngine.PageEditInfo>> = _editorPagesPlan.asStateFlow()
-
-    private val _editedPdfResult = MutableStateFlow<File?>(null)
-    val editedPdfResult: StateFlow<File?> = _editedPdfResult.asStateFlow()
-
-    fun selectPdfForEditor(file: File) {
-        _editorPdfFile.value = file
-        _editedPdfResult.value = null
-        loadEditorPages(file)
-    }
-
-    fun selectPdfUriForEditor(uri: Uri) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressMessage.value = "Loading PDF for editor..."
-            val file = copyUriToTempFile(uri, "editor_${System.currentTimeMillis()}.pdf")
-            _isLoading.value = false
-            if (file != null) {
-                selectPdfForEditor(file)
-            }
-        }
-    }
-
-    fun loadSamplePdfForEditor() {
-        viewModelScope.launch {
-            val sample = SampleFilesProvider.getOrCreateSamplePdf(getApplication())
-            selectPdfForEditor(sample)
-            _statusNotification.value = "Loaded 3-page sample report into PDF Editor"
-        }
-    }
-
-    private fun loadEditorPages(file: File) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressMessage.value = "Loading page layout..."
-            val thumbs = PdfEngine.renderPdfPageThumbnails(file)
-            _editorPageThumbnails.value = thumbs
-            _editorPagesPlan.value = thumbs.indices.map {
-                PdfEngine.PageEditInfo(originalPageIndex = it, rotationDegrees = 0, isDeleted = false)
-            }
-            _isLoading.value = false
-        }
-    }
-
-    fun rotateEditorPage(planIndex: Int) {
-        val list = _editorPagesPlan.value.toMutableList()
-        if (planIndex in list.indices) {
-            val item = list[planIndex]
-            list[planIndex] = item.copy(rotationDegrees = (item.rotationDegrees + 90) % 360)
-            _editorPagesPlan.value = list
-        }
-    }
-
-    fun toggleDeleteEditorPage(planIndex: Int) {
-        val list = _editorPagesPlan.value.toMutableList()
-        if (planIndex in list.indices) {
-            val item = list[planIndex]
-            list[planIndex] = item.copy(isDeleted = !item.isDeleted)
-            _editorPagesPlan.value = list
-        }
-    }
-
-    fun moveEditorPage(from: Int, to: Int) {
-        val list = _editorPagesPlan.value.toMutableList()
-        if (from in list.indices && to in list.indices) {
-            val item = list.removeAt(from)
-            list.add(to, item)
-            _editorPagesPlan.value = list
-        }
-    }
-
-    fun exportEditedPdf() {
-        val file = _editorPdfFile.value ?: return
-        val plan = _editorPagesPlan.value
-        val activeCount = plan.count { !it.isDeleted }
-        if (activeCount == 0) {
-            _statusNotification.value = "Cannot export: All pages are marked as deleted"
-            return
-        }
-
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressRatio.value = 0f
-            _progressMessage.value = "Exporting reorganized PDF ($activeCount pages)..."
-
-            try {
-                val exported = PdfEngine.exportEditedPdf(
-                    context = getApplication(),
-                    inputPdf = file,
-                    pagesPlan = plan,
-                    onProgress = { cur, tot ->
-                        _progressRatio.value = cur.toFloat() / tot.toFloat()
-                        _progressMessage.value = "Saving page $cur of $tot..."
-                    }
-                )
-
-                _editedPdfResult.value = exported
-
-                repository.insert(
-                    HistoryEntity(
-                        title = exported.name,
-                        filePath = exported.absolutePath,
-                        fileType = "PDF",
-                        operationType = "Page Editor",
-                        sizeBytes = exported.length(),
-                        pageCount = activeCount
-                    )
-                )
-
-                _statusNotification.value = "Exported ${exported.name} ($activeCount pages, ${ImageEngine.formatFileSize(exported.length())})"
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _statusNotification.value = "Error exporting PDF: ${e.localizedMessage}"
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    // ==========================================
-    // 5. HISTORY & FILE MANAGEMENT
-    // ==========================================
-    fun toggleFavorite(entity: HistoryEntity) {
-        viewModelScope.launch {
-            repository.update(entity.copy(isFavorite = !entity.isFavorite))
-        }
-    }
-
-    fun deleteHistoryItem(entity: HistoryEntity) {
-        viewModelScope.launch {
-            repository.delete(entity)
-            _statusNotification.value = "Deleted ${entity.title}"
-        }
-    }
-
-    fun clearAllHistory() {
-        viewModelScope.launch {
-            repository.clearAll()
-            _statusNotification.value = "History cleared"
-        }
-    }
-
-    fun seedSampleHistory() {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressMessage.value = "Creating sample history records..."
-            try {
-                val samplePdf = SampleFilesProvider.getOrCreateSamplePdf(getApplication())
-                val sampleImages = SampleFilesProvider.getOrCreateSampleImages(getApplication())
-
-                val pdfEntry = HistoryEntity(
-                    title = samplePdf.name,
-                    filePath = samplePdf.absolutePath,
-                    fileType = "PDF",
-                    operationType = "JPG to PDF",
-                    sizeBytes = samplePdf.length(),
-                    pageCount = 3,
-                    timestamp = System.currentTimeMillis() - 1000 * 60 * 15,
-                    isFavorite = true
-                )
-
-                val imgEntries = sampleImages.mapIndexed { idx, file ->
-                    HistoryEntity(
-                        title = file.name,
-                        filePath = file.absolutePath,
-                        fileType = "JPG",
-                        operationType = if (idx == 0) "PDF to JPG" else "Compressed",
-                        sizeBytes = file.length(),
-                        pageCount = 1,
-                        timestamp = System.currentTimeMillis() - 1000 * 60 * (30 * (idx + 1)),
-                        isFavorite = false
-                    )
-                }
-
-                repository.insert(pdfEntry)
-                repository.insertAll(imgEntries)
-                _statusNotification.value = "Sample conversion files added to Room history"
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _statusNotification.value = "Failed to populate history: ${e.localizedMessage}"
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    // ==========================================
-    // 6. IMAGE & PDF SIZE ENHANCER STATE & ACTIONS
-    // ==========================================
-    enum class EnhancerTab { IMAGE, PDF }
-    private val _enhancerTab = MutableStateFlow(EnhancerTab.IMAGE)
-    val enhancerTab: StateFlow<EnhancerTab> = _enhancerTab.asStateFlow()
-
-    fun setEnhancerTab(tab: EnhancerTab) { _enhancerTab.value = tab }
-
-    // Image Enhancer State
-    private val _enhanceSourceImage = MutableStateFlow<Bitmap?>(null)
-    val enhanceSourceImage: StateFlow<Bitmap?> = _enhanceSourceImage.asStateFlow()
-
-    private val _enhanceSourceImageOriginalSize = MutableStateFlow(0L)
-    val enhanceSourceImageOriginalSize: StateFlow<Long> = _enhanceSourceImageOriginalSize.asStateFlow()
-
-    private val _enhanceImageScale = MutableStateFlow(2.0f) // 2x upscale
-    val enhanceImageScale: StateFlow<Float> = _enhanceImageScale.asStateFlow()
-
-    private val _enhanceImageSharpness = MutableStateFlow(0.5f)
-    val enhanceImageSharpness: StateFlow<Float> = _enhanceImageSharpness.asStateFlow()
-
-    private val _enhanceImageContrast = MutableStateFlow(1.15f)
-    val enhanceImageContrast: StateFlow<Float> = _enhanceImageContrast.asStateFlow()
-
-    private val _enhanceImageTargetMinKb = MutableStateFlow(0) // 0 = no min, e.g. 500 = 500 KB
-    val enhanceImageTargetMinKb: StateFlow<Int> = _enhanceImageTargetMinKb.asStateFlow()
-
-    private val _enhanceImageFormat = MutableStateFlow(ImageEngine.OutputFormat.JPEG)
-    val enhanceImageFormat: StateFlow<ImageEngine.OutputFormat> = _enhanceImageFormat.asStateFlow()
-
-    private val _enhancedImageResult = MutableStateFlow<File?>(null)
-    val enhancedImageResult: StateFlow<File?> = _enhancedImageResult.asStateFlow()
-
-    private val _enhancedImageResultBitmap = MutableStateFlow<Bitmap?>(null)
-    val enhancedImageResultBitmap: StateFlow<Bitmap?> = _enhancedImageResultBitmap.asStateFlow()
-
-    fun setEnhanceImageScale(scale: Float) { _enhanceImageScale.value = scale }
-    fun setEnhanceImageSharpness(s: Float) { _enhanceImageSharpness.value = s }
-    fun setEnhanceImageContrast(c: Float) { _enhanceImageContrast.value = c }
-    fun setEnhanceImageTargetMinKb(kb: Int) { _enhanceImageTargetMinKb.value = kb }
-    fun setEnhanceImageFormat(f: ImageEngine.OutputFormat) { _enhanceImageFormat.value = f }
-
-    fun selectImageForEnhance(uri: Uri) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressMessage.value = "Reading image for enhancement..."
-            val pfd = getApplication<Application>().contentResolver.openFileDescriptor(uri, "r")
-            val size = pfd?.statSize ?: 0L
-            pfd?.close()
-
-            val bitmap = ImageEngine.decodeBitmapFromUri(getApplication(), uri, maxDimension = 3000)
-            _enhanceSourceImage.value = bitmap
-            _enhanceSourceImageOriginalSize.value = if (size > 0) size else (bitmap?.byteCount?.toLong() ?: 0L)
-            _enhancedImageResult.value = null
-            _enhancedImageResultBitmap.value = null
-            _isLoading.value = false
-        }
-    }
-
-    fun loadSampleImageForEnhance() {
-        viewModelScope.launch {
-            val samples = SampleFilesProvider.getOrCreateSampleImages(getApplication())
-            if (samples.isNotEmpty()) {
-                val file = samples.first()
-                val bitmap = android.graphics.BitmapFactory.decodeFile(file.absolutePath)
-                _enhanceSourceImage.value = bitmap
-                _enhanceSourceImageOriginalSize.value = file.length()
-                _enhancedImageResult.value = null
-                _enhancedImageResultBitmap.value = null
-                _statusNotification.value = "Loaded sample image (${file.name})"
-            }
-        }
-    }
-
-    fun runEnhanceImage() {
-        val src = _enhanceSourceImage.value ?: return
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressRatio.value = 0f
-            _progressMessage.value = "Upscaling and enhancing image details..."
-
-            try {
-                val targetMinBytes = _enhanceImageTargetMinKb.value * 1024L
-                val (file, enhancedBm) = ImageEngine.enhanceImage(
-                    context = getApplication(),
-                    sourceBitmap = src,
-                    scaleFactor = _enhanceImageScale.value,
-                    sharpnessStrength = _enhanceImageSharpness.value,
-                    contrastBoost = _enhanceImageContrast.value,
-                    targetMinSizeBytes = targetMinBytes,
-                    format = _enhanceImageFormat.value,
-                    quality = 95
-                )
-
-                _enhancedImageResult.value = file
-                _enhancedImageResultBitmap.value = enhancedBm
-
-                repository.insert(
-                    HistoryEntity(
-                        title = file.name,
-                        filePath = file.absolutePath,
-                        fileType = _enhanceImageFormat.value.extension.uppercase(),
-                        operationType = "Enhanced",
-                        sizeBytes = file.length(),
-                        pageCount = 1
-                    )
-                )
-
-                _statusNotification.value = "Image Enhanced: ${file.name} (${ImageEngine.formatFileSize(file.length())}, ${enhancedBm.width}×${enhancedBm.height}px)"
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _statusNotification.value = "Enhance failed: ${e.localizedMessage}"
-            } finally {
-                _isLoading.value = false
-            }
-        }
-    }
-
-    // PDF Enhancer State
-    private val _enhanceSourcePdf = MutableStateFlow<File?>(null)
-    val enhanceSourcePdf: StateFlow<File?> = _enhanceSourcePdf.asStateFlow()
-
-    private val _enhancePdfDpiScale = MutableStateFlow(3.5f) // ~250-300 DPI
-    val enhancePdfDpiScale: StateFlow<Float> = _enhancePdfDpiScale.asStateFlow()
-
-    private val _enhancePdfSharpness = MutableStateFlow(0.4f)
-    val enhancePdfSharpness: StateFlow<Float> = _enhancePdfSharpness.asStateFlow()
-
-    private val _enhancePdfContrast = MutableStateFlow(1.15f)
-    val enhancePdfContrast: StateFlow<Float> = _enhancePdfContrast.asStateFlow()
-
-    private val _enhancePdfTargetMinKb = MutableStateFlow(0)
-    val enhancePdfTargetMinKb: StateFlow<Int> = _enhancePdfTargetMinKb.asStateFlow()
-
-    private val _enhancedPdfResult = MutableStateFlow<File?>(null)
-    val enhancedPdfResult: StateFlow<File?> = _enhancedPdfResult.asStateFlow()
-
-    fun setEnhancePdfDpiScale(dpi: Float) { _enhancePdfDpiScale.value = dpi }
-    fun setEnhancePdfSharpness(s: Float) { _enhancePdfSharpness.value = s }
-    fun setEnhancePdfContrast(c: Float) { _enhancePdfContrast.value = c }
-    fun setEnhancePdfTargetMinKb(kb: Int) { _enhancePdfTargetMinKb.value = kb }
-
-    fun selectPdfForEnhance(file: File) {
-        _enhanceSourcePdf.value = file
-        _enhancedPdfResult.value = null
-    }
-
-    fun selectPdfUriForEnhance(uri: Uri) {
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressMessage.value = "Reading PDF..."
-            val file = copyUriToTempFile(uri, "enhance_in_${System.currentTimeMillis()}.pdf")
-            _isLoading.value = false
-            if (file != null) {
-                selectPdfForEnhance(file)
-            }
-        }
-    }
-
-    fun loadSamplePdfForEnhance() {
-        viewModelScope.launch {
-            val sample = SampleFilesProvider.getOrCreateSamplePdf(getApplication())
-            selectPdfForEnhance(sample)
-            _statusNotification.value = "Loaded sample PDF for enhancement"
-        }
-    }
-
-    fun runEnhancePdf() {
-        val file = _enhanceSourcePdf.value ?: return
-        viewModelScope.launch {
-            _isLoading.value = true
-            _progressRatio.value = 0f
-            _progressMessage.value = "Upscaling and enhancing PDF pages..."
-
-            try {
-                val targetMinBytes = _enhancePdfTargetMinKb.value * 1024L
-                val enhancedFile = PdfEngine.enhancePdf(
-                    context = getApplication(),
-                    inputPdf = file,
-                    dpiScale = _enhancePdfDpiScale.value,
-                    sharpnessStrength = _enhancePdfSharpness.value,
-                    contrastBoost = _enhancePdfContrast.value,
-                    targetMinSizeBytes = targetMinBytes,
-                    onProgress = { cur, tot ->
-                        _progressRatio.value = cur.toFloat() / tot.toFloat()
-                        _progressMessage.value = "Upscaling page $cur of $tot..."
-                    }
-                )
-
-                _enhancedPdfResult.value = enhancedFile
-
-                repository.insert(
-                    HistoryEntity(
-                        title = enhancedFile.name,
-                        filePath = enhancedFile.absolutePath,
-                        fileType = "PDF",
-                        operationType = "Enhanced",
-                        sizeBytes = enhancedFile.length(),
-                        pageCount = 1
-                    )
-                )
-
-                _statusNotification.value = "PDF Enhanced: ${enhancedFile.name} (${ImageEngine.formatFileSize(enhancedFile.length())})"
-            } catch (e: Exception) {
-                e.printStackTrace()
-                _statusNotification.value = "PDF Enhancement failed: ${e.localizedMessage}"
             } finally {
                 _isLoading.value = false
             }
@@ -997,8 +600,15 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
     private val _mergePdfList = MutableStateFlow<List<File>>(emptyList())
     val mergePdfList: StateFlow<List<File>> = _mergePdfList.asStateFlow()
 
+    private val _mergePdfSecurityConfig = MutableStateFlow(PdfExportSecurityConfig())
+    val mergePdfSecurityConfig: StateFlow<PdfExportSecurityConfig> = _mergePdfSecurityConfig.asStateFlow()
+
     private val _mergedPdfResult = MutableStateFlow<File?>(null)
     val mergedPdfResult: StateFlow<File?> = _mergedPdfResult.asStateFlow()
+
+    fun setMergePdfSecurityConfig(config: PdfExportSecurityConfig) {
+        _mergePdfSecurityConfig.value = config
+    }
 
     fun addPdfUrisForMerge(uris: List<Uri>) {
         viewModelScope.launch {
@@ -1039,11 +649,49 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
 
     fun movePdfInMerge(from: Int, to: Int) {
         val list = _mergePdfList.value.toMutableList()
-        if (from in list.indices && to in list.indices) {
+        if (from in list.indices && to in list.indices && from != to) {
             val item = list.removeAt(from)
             list.add(to, item)
             _mergePdfList.value = list
+            _mergedPdfResult.value = null
         }
+    }
+
+    fun setPdfPositionInMerge(fromIndex: Int, targetPosition: Int) {
+        // targetPosition is 0-indexed
+        val list = _mergePdfList.value.toMutableList()
+        if (fromIndex in list.indices && targetPosition in list.indices && fromIndex != targetPosition) {
+            val item = list.removeAt(fromIndex)
+            list.add(targetPosition, item)
+            _mergePdfList.value = list
+            _mergedPdfResult.value = null
+        }
+    }
+
+    fun reverseMergePdfList() {
+        val list = _mergePdfList.value.reversed()
+        _mergePdfList.value = list
+        _mergedPdfResult.value = null
+    }
+
+    fun sortMergePdfsByName(ascending: Boolean = true) {
+        val list = if (ascending) {
+            _mergePdfList.value.sortedBy { it.name.lowercase() }
+        } else {
+            _mergePdfList.value.sortedByDescending { it.name.lowercase() }
+        }
+        _mergePdfList.value = list
+        _mergedPdfResult.value = null
+    }
+
+    fun sortMergePdfsBySize(ascending: Boolean = true) {
+        val list = if (ascending) {
+            _mergePdfList.value.sortedBy { it.length() }
+        } else {
+            _mergePdfList.value.sortedByDescending { it.length() }
+        }
+        _mergePdfList.value = list
+        _mergedPdfResult.value = null
     }
 
     fun clearMergePdfs() {
@@ -1058,13 +706,19 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
             return
         }
 
+        val security = _mergePdfSecurityConfig.value
+        if (security.isProtectionEnabled && !security.isValid) {
+            _statusNotification.value = security.errorMessage ?: "Please verify password configuration"
+            return
+        }
+
         viewModelScope.launch {
             _isLoading.value = true
             _progressRatio.value = 0f
             _progressMessage.value = "Merging ${pdfs.size} PDFs..."
 
             try {
-                val mergedFile = PdfEngine.mergePdfs(
+                val rawMergedFile = PdfEngine.mergePdfs(
                     context = getApplication(),
                     inputPdfs = pdfs,
                     onProgress = { cur, tot, pages ->
@@ -1073,23 +727,79 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                     }
                 )
 
-                _mergedPdfResult.value = mergedFile
-
-                repository.insert(
-                    HistoryEntity(
-                        title = mergedFile.name,
-                        filePath = mergedFile.absolutePath,
-                        fileType = "PDF",
-                        operationType = "PDF Merge",
-                        sizeBytes = mergedFile.length(),
-                        pageCount = pdfs.size
+                val finalMergedFile = if (security.isProtectionEnabled && security.userPassword.isNotEmpty()) {
+                    _progressMessage.value = "Applying AES encryption & password lock..."
+                    val perms = PdfEngine.PdfPermissions(
+                        canPrint = security.canPrint,
+                        canModify = security.canModify,
+                        canExtractContent = security.canExtractContent,
+                        canModifyAnnotations = security.canModifyAnnotations
                     )
-                )
+                    PdfEngine.encryptPdf(
+                        context = getApplication(),
+                        inputPdf = rawMergedFile,
+                        userPassword = security.userPassword,
+                        ownerPassword = security.ownerPassword.ifEmpty { security.userPassword },
+                        permissions = perms,
+                        keyLength = security.keyLength,
+                        outputFileName = "Merged_${System.currentTimeMillis()}_protected.pdf"
+                    )
+                } else {
+                    rawMergedFile
+                }
 
-                _statusNotification.value = "Successfully merged ${pdfs.size} PDFs (${ImageEngine.formatFileSize(mergedFile.length())})"
+                _mergedPdfResult.value = finalMergedFile
+
+                val badge = if (security.isProtectionEnabled) " 🔒 [Encrypted]" else ""
+                _statusNotification.value = "Successfully merged ${pdfs.size} PDFs$badge (${ImageEngine.formatFileSize(finalMergedFile.length())})"
             } catch (e: Exception) {
                 e.printStackTrace()
                 _statusNotification.value = "Merge failed: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * Applies password protection to any exported PDF file directly.
+     */
+    fun protectAnyExportedPdf(
+        file: File,
+        config: PdfExportSecurityConfig,
+        onSuccess: (File) -> Unit = {}
+    ) {
+        if (!config.isValid || config.userPassword.isEmpty()) {
+            _statusNotification.value = config.errorMessage ?: "Please enter a valid password"
+            return
+        }
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Encrypting PDF with password..."
+
+            try {
+                val perms = PdfEngine.PdfPermissions(
+                    canPrint = config.canPrint,
+                    canModify = config.canModify,
+                    canExtractContent = config.canExtractContent,
+                    canModifyAnnotations = config.canModifyAnnotations
+                )
+                val protectedFile = PdfEngine.encryptPdf(
+                    context = getApplication(),
+                    inputPdf = file,
+                    userPassword = config.userPassword,
+                    ownerPassword = config.ownerPassword.ifEmpty { config.userPassword },
+                    permissions = perms,
+                    keyLength = config.keyLength,
+                    outputFileName = "${file.nameWithoutExtension}_protected.pdf"
+                )
+
+                _statusNotification.value = "Successfully password protected ${protectedFile.name}"
+                onSuccess(protectedFile)
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Protection failed: ${e.localizedMessage}"
             } finally {
                 _isLoading.value = false
             }
@@ -1177,6 +887,14 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
         _splitSelectedPageIndices.value = emptySet()
     }
 
+    fun clearSplitPdf() {
+        _splitSourcePdf.value = null
+        _splitPageThumbnails.value = emptyList()
+        _splitSelectedPageIndices.value = emptySet()
+        _splitPdfResult.value = null
+        _splitMultipleResults.value = emptyList()
+    }
+
     fun splitSelectedPages() {
         val file = _splitSourcePdf.value ?: return
         val indices = _splitSelectedPageIndices.value.toList().sorted()
@@ -1203,17 +921,6 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
 
                 _splitPdfResult.value = extracted
                 _splitMultipleResults.value = emptyList()
-
-                repository.insert(
-                    HistoryEntity(
-                        title = extracted.name,
-                        filePath = extracted.absolutePath,
-                        fileType = "PDF",
-                        operationType = "PDF Split",
-                        sizeBytes = extracted.length(),
-                        pageCount = indices.size
-                    )
-                )
 
                 _statusNotification.value = "Extracted ${indices.size} pages into ${extracted.name} (${ImageEngine.formatFileSize(extracted.length())})"
             } catch (e: Exception) {
@@ -1244,19 +951,6 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
 
                 _splitMultipleResults.value = files
                 _splitPdfResult.value = null
-
-                files.forEach { singleFile ->
-                    repository.insert(
-                        HistoryEntity(
-                            title = singleFile.name,
-                            filePath = singleFile.absolutePath,
-                            fileType = "PDF",
-                            operationType = "PDF Split",
-                            sizeBytes = singleFile.length(),
-                            pageCount = 1
-                        )
-                    )
-                }
 
                 _statusNotification.value = "Split into ${files.size} single-page PDFs"
             } catch (e: Exception) {
@@ -1454,20 +1148,6 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                 _progressRatio.value = 0.9f
                 _securityEncryptResult.value = protectedFile
 
-                // Log into Room database
-                val info = _securityEncryptInfo.value
-                val pageCount = info?.pageCount?.takeIf { it > 0 } ?: 1
-                repository.insert(
-                    HistoryEntity(
-                        title = protectedFile.name,
-                        filePath = protectedFile.absolutePath,
-                        fileType = "PDF",
-                        operationType = "PDF Password Protected",
-                        sizeBytes = protectedFile.length(),
-                        pageCount = pageCount
-                    )
-                )
-
                 _statusNotification.value = "PDF encrypted & locked successfully!"
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -1565,21 +1245,6 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                 _progressRatio.value = 0.8f
                 _securityDecryptResult.value = unlockedFile
 
-                // Read clean security info to get page count
-                val cleanInfo = PdfEngine.checkPdfSecurity(getApplication(), unlockedFile)
-                val pageCount = cleanInfo.pageCount.takeIf { it > 0 } ?: 1
-
-                repository.insert(
-                    HistoryEntity(
-                        title = unlockedFile.name,
-                        filePath = unlockedFile.absolutePath,
-                        fileType = "PDF",
-                        operationType = "PDF Password Removed",
-                        sizeBytes = unlockedFile.length(),
-                        pageCount = pageCount
-                    )
-                )
-
                 _statusNotification.value = "Password removed! Unlocked PDF is ready."
             } catch (e: IllegalArgumentException) {
                 _securityDecryptError.value = e.message ?: "Incorrect password. Unable to unlock PDF."
@@ -1588,6 +1253,92 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                 e.printStackTrace()
                 _securityDecryptError.value = "Decryption error: ${e.localizedMessage}"
                 _statusNotification.value = "Failed to decrypt: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+                _progressRatio.value = 0f
+            }
+        }
+    }
+
+    // ==========================================
+    // 8. TEXT TO PDF STATE & ACTIONS
+    // ==========================================
+    private val _textToPdfTitle = MutableStateFlow("")
+    val textToPdfTitle: StateFlow<String> = _textToPdfTitle.asStateFlow()
+
+    private val _textToPdfContent = MutableStateFlow("")
+    val textToPdfContent: StateFlow<String> = _textToPdfContent.asStateFlow()
+
+    private val _textToPdfResult = MutableStateFlow<File?>(null)
+    val textToPdfResult: StateFlow<File?> = _textToPdfResult.asStateFlow()
+
+    fun setTextToPdfTitle(title: String) {
+        _textToPdfTitle.value = title
+    }
+
+    fun setTextToPdfContent(content: String) {
+        _textToPdfContent.value = content
+    }
+
+    fun loadTextFromUri(uri: Uri) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Reading text file..."
+            try {
+                val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
+                val text = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
+                _textToPdfContent.value = text
+                if (_textToPdfTitle.value.isBlank()) {
+                    var name = "Document"
+                    val cursor = getApplication<Application>().contentResolver.query(uri, null, null, null, null)
+                    cursor?.use {
+                        if (it.moveToFirst()) {
+                            val idx = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                            if (idx != -1) name = it.getString(idx)
+                        }
+                    }
+                    _textToPdfTitle.value = name.substringBeforeLast(".")
+                }
+                _statusNotification.value = "Text file loaded successfully"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error reading text file: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun clearTextToPdf() {
+        _textToPdfTitle.value = ""
+        _textToPdfContent.value = ""
+        _textToPdfResult.value = null
+    }
+
+    fun convertTextToPdfAction() {
+        val content = _textToPdfContent.value
+        if (content.isBlank()) {
+            _statusNotification.value = "Please enter text or upload a text file"
+            return
+        }
+
+        val title = _textToPdfTitle.value.ifBlank { "Document" }
+
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Generating formatted PDF..."
+            _progressRatio.value = 0.5f
+            try {
+                val file = PdfEngine.convertTextToPdf(
+                    context = getApplication(),
+                    title = title,
+                    content = content
+                )
+                _textToPdfResult.value = file
+                _statusNotification.value = "PDF created successfully: ${file.name}"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error creating PDF: ${e.localizedMessage}"
             } finally {
                 _isLoading.value = false
                 _progressRatio.value = 0f

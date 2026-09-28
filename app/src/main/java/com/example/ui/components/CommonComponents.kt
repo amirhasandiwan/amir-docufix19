@@ -17,13 +17,20 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.EnhancedEncryption
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -31,11 +38,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +57,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -52,6 +68,8 @@ import com.example.ui.theme.SecondaryTeal
 import com.example.ui.theme.SuccessGreen
 import com.example.utils.FileOpener
 import com.example.utils.ImageEngine
+import com.example.utils.PdfEngine
+import kotlinx.coroutines.launch
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -154,11 +172,25 @@ fun LoadingOverlay(
 fun ConversionResultCard(
     file: File,
     operationName: String,
-    onDismiss: (() -> Unit)? = null
+    onDismiss: (() -> Unit)? = null,
+    onFileProtected: ((File) -> Unit)? = null
 ) {
     val context = LocalContext.current
-    val isPdf = file.name.endsWith(".pdf", ignoreCase = true)
+    val coroutineScope = rememberCoroutineScope()
+    var currentFile by remember(file) { mutableStateOf(file) }
+
+    val isPdf = currentFile.name.endsWith(".pdf", ignoreCase = true)
+    val isProtected = currentFile.name.contains("_protected", ignoreCase = true)
     val mimeType = if (isPdf) "application/pdf" else "image/*"
+
+    var showPasswordDialog by remember { mutableStateOf(false) }
+    var passwordInput by remember { mutableStateOf("") }
+    var confirmPasswordInput by remember { mutableStateOf("") }
+    var showPasswordText by remember { mutableStateOf(false) }
+    var canPrint by remember { mutableStateOf(true) }
+    var canCopy by remember { mutableStateOf(true) }
+    var isEncrypting by remember { mutableStateOf(false) }
+    var encryptionError by remember { mutableStateOf<String?>(null) }
 
     Card(
         modifier = Modifier
@@ -184,7 +216,9 @@ fun ConversionResultCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Icon(
-                        imageVector = if (isPdf) Icons.Default.Description else Icons.Default.Image,
+                        imageVector = if (isPdf) {
+                            if (isProtected) Icons.Default.Lock else Icons.Default.Description
+                        } else Icons.Default.Image,
                         contentDescription = null,
                         tint = Color.White,
                         modifier = Modifier.size(24.dp)
@@ -208,28 +242,48 @@ fun ConversionResultCard(
                         )
                     }
                     Text(
-                        text = file.name,
+                        text = currentFile.name,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = Color(0xFF0F172A),
                         maxLines = 1
                     )
-                    Text(
-                        text = "Size: ${ImageEngine.formatFileSize(file.length())}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFF475569)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "Size: ${ImageEngine.formatFileSize(currentFile.length())}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFF475569)
+                        )
+                        if (isProtected) {
+                            Surface(
+                                color = SuccessGreen.copy(alpha = 0.15f),
+                                shape = RoundedCornerShape(4.dp)
+                            ) {
+                                Text(
+                                    text = "🔒 Encrypted",
+                                    color = SuccessGreen,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Action Buttons
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Button(
-                    onClick = { FileOpener.openFile(context, file, mimeType) },
+                    onClick = { FileOpener.openFile(context, currentFile, mimeType) },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -249,7 +303,7 @@ fun ConversionResultCard(
                 }
 
                 OutlinedButton(
-                    onClick = { FileOpener.shareFile(context, file, mimeType) },
+                    onClick = { FileOpener.shareFile(context, currentFile, mimeType) },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp)
@@ -265,7 +319,195 @@ fun ConversionResultCard(
                     Text("Share", fontWeight = FontWeight.SemiBold)
                 }
             }
+
+            // Optional Quick Lock with Password button if not already protected
+            if (isPdf && !isProtected) {
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = {
+                        passwordInput = ""
+                        confirmPasswordInput = ""
+                        encryptionError = null
+                        showPasswordDialog = true
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(44.dp)
+                        .testTag("btn_quick_lock_exported_pdf"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = PrimaryIndigo
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, PrimaryIndigo.copy(alpha = 0.5f))
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = PrimaryIndigo,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "Protect with Password (Encrypt)",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
         }
+    }
+
+    // Password Protection Dialog
+    if (showPasswordDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                if (!isEncrypting) showPasswordDialog = false
+            },
+            icon = {
+                Icon(Icons.Default.EnhancedEncryption, contentDescription = null, tint = PrimaryIndigo)
+            },
+            title = {
+                Text("Lock Document with Password", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            },
+            text = {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Set an open password to securely encrypt \"${currentFile.name}\" using standard PDF encryption.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    OutlinedTextField(
+                        value = passwordInput,
+                        onValueChange = { passwordInput = it },
+                        label = { Text("Open Password") },
+                        placeholder = { Text("Enter password") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_quick_lock_password"),
+                        shape = RoundedCornerShape(10.dp),
+                        visualTransformation = if (showPasswordText) VisualTransformation.None else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { showPasswordText = !showPasswordText }) {
+                                Icon(
+                                    imageVector = if (showPasswordText) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = null
+                                )
+                            }
+                        }
+                    )
+
+                    OutlinedTextField(
+                        value = confirmPasswordInput,
+                        onValueChange = { confirmPasswordInput = it },
+                        label = { Text("Confirm Password") },
+                        placeholder = { Text("Re-enter password") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("input_quick_lock_confirm_password"),
+                        shape = RoundedCornerShape(10.dp),
+                        visualTransformation = if (showPasswordText) VisualTransformation.None else PasswordVisualTransformation()
+                    )
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = canPrint,
+                            onCheckedChange = { canPrint = it },
+                            colors = CheckboxDefaults.colors(checkedColor = PrimaryIndigo)
+                        )
+                        Text("Allow document printing", fontSize = 12.sp)
+                    }
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = canCopy,
+                            onCheckedChange = { canCopy = it },
+                            colors = CheckboxDefaults.colors(checkedColor = PrimaryIndigo)
+                        )
+                        Text("Allow copying text and images", fontSize = 12.sp)
+                    }
+
+                    if (encryptionError != null) {
+                        Text(
+                            text = encryptionError!!,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+
+                    if (isEncrypting) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text("Encrypting document...", fontSize = 12.sp)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (passwordInput.isEmpty()) {
+                            encryptionError = "Password cannot be empty"
+                            return@Button
+                        }
+                        if (passwordInput != confirmPasswordInput) {
+                            encryptionError = "Passwords do not match"
+                            return@Button
+                        }
+
+                        isEncrypting = true
+                        encryptionError = null
+
+                        coroutineScope.launch {
+                            try {
+                                val perms = PdfEngine.PdfPermissions(
+                                    canPrint = canPrint,
+                                    canExtractContent = canCopy,
+                                    canModify = false,
+                                    canModifyAnnotations = false
+                                )
+                                val protectedFile = PdfEngine.encryptPdf(
+                                    context = context,
+                                    inputPdf = currentFile,
+                                    userPassword = passwordInput,
+                                    ownerPassword = passwordInput,
+                                    permissions = perms,
+                                    keyLength = 128
+                                )
+                                currentFile = protectedFile
+                                onFileProtected?.invoke(protectedFile)
+                                showPasswordDialog = false
+                            } catch (e: Exception) {
+                                encryptionError = "Failed: ${e.localizedMessage}"
+                            } finally {
+                                isEncrypting = false
+                            }
+                        }
+                    },
+                    enabled = !isEncrypting && passwordInput.isNotEmpty(),
+                    colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
+                ) {
+                    Text("Apply & Encrypt")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { showPasswordDialog = false },
+                    enabled = !isEncrypting
+                ) {
+                    Text("Cancel")
+                }
+            }
+        )
     }
 }
 

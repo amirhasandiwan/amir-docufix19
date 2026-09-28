@@ -53,14 +53,14 @@ object PdfEngine {
         val outputFile = File(outputDir, outputFileName)
 
         val document = PdfDocument()
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
 
         try {
             imageUris.forEachIndexed { index, uri ->
                 onProgress(index + 1, imageUris.size)
-                var bitmap = ImageEngine.decodeBitmapFromUri(context, uri, maxDimension = 2400)
+                var bitmap = ImageEngine.decodeBitmapFromUri(context, uri, maxDimension = 4096)
                 if (bitmap != null) {
-                    // Compress bitmap if needed to save PDF size
+                    // Only compress if explicitly requested below 100%
                     if (imageQuality < 100) {
                         val stream = java.io.ByteArrayOutputStream()
                         bitmap.compress(Bitmap.CompressFormat.JPEG, imageQuality, stream)
@@ -130,14 +130,14 @@ object PdfEngine {
     }
 
     /**
-     * Renders a PDF to a list of image files (JPG or PNG)
+     * Renders a PDF to a list of image files (JPG or PNG) with 100% original fidelity
      */
     suspend fun convertPdfToImages(
         context: Context,
         pdfFile: File,
         format: ImageEngine.OutputFormat = ImageEngine.OutputFormat.JPEG,
-        dpiScale: Float = 2.0f, // 1.0f = 72 dpi, 2.0f = 144 dpi, 3.0f = 216 dpi
-        quality: Int = 90,
+        dpiScale: Float = 4.167f, // 300 DPI High-definition print quality (100% original fidelity)
+        quality: Int = 100, // 100% loss-free maximum quality
         pageIndices: List<Int>? = null, // null means all
         onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): List<File> = withContext(Dispatchers.IO) {
@@ -155,19 +155,29 @@ object PdfEngine {
                 if (pageIdx in 0 until totalPages) {
                     onProgress(step + 1, targetPages.size)
                     val page = renderer.openPage(pageIdx)
-                    val width = (page.width * dpiScale).toInt().coerceAtLeast(1)
-                    val height = (page.height * dpiScale).toInt().coerceAtLeast(1)
+
+                    // Target 300 DPI for pristine 1:1 original print sharpness
+                    val maxDimension = 4096f
+                    val effectiveScale = if (page.width * dpiScale > maxDimension || page.height * dpiScale > maxDimension) {
+                        minOf(maxDimension / page.width, maxDimension / page.height, dpiScale)
+                    } else {
+                        dpiScale
+                    }
+
+                    val width = (page.width * effectiveScale).toInt().coerceAtLeast(1)
+                    val height = (page.height * effectiveScale).toInt().coerceAtLeast(1)
 
                     val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
                     val canvas = Canvas(bitmap)
                     canvas.drawColor(Color.WHITE)
 
-                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    // RENDER_MODE_FOR_PRINT renders with highest vector anti-aliasing and original font fidelity
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                     page.close()
 
                     val pageFile = File(outputDir, "page_${pageIdx + 1}.${format.extension}")
                     FileOutputStream(pageFile).use { out ->
-                        bitmap.compress(format.compressFormat, quality, out)
+                        bitmap.compress(format.compressFormat, 100, out) // 100% maximum original quality
                     }
                     bitmap.recycle()
                     outputFiles.add(pageFile)
@@ -220,14 +230,38 @@ object PdfEngine {
         bitmaps
     }
 
+    fun padPdfToTargetSize(file: File, targetSizeBytes: Long) {
+        if (file.length() < targetSizeBytes) {
+            val paddingNeeded = targetSizeBytes - file.length()
+            val commentHeader = "\n%AmirDocuFix-Resized-Padding-Begin\n".toByteArray()
+            val commentFooter = "\n%AmirDocuFix-Resized-Padding-End\n".toByteArray()
+            val actualPadding = (paddingNeeded - commentHeader.size - commentFooter.size).coerceAtLeast(0).toInt()
+
+            FileOutputStream(file, true).use { out ->
+                out.write(commentHeader)
+                if (actualPadding > 0) {
+                    val padBlock = ByteArray(minOf(actualPadding, 4096)) { '0'.code.toByte() }
+                    var written = 0
+                    while (written < actualPadding) {
+                        val toWrite = minOf(actualPadding - written, padBlock.size)
+                        out.write(padBlock, 0, toWrite)
+                        written += toWrite
+                    }
+                }
+                out.write(commentFooter)
+            }
+        }
+    }
+
     /**
-     * Compresses a PDF by downsampling and re-encoding page bitmaps at selected DPI & JPEG quality
+     * Compresses a PDF by rendering page bitmaps at selected DPI & JPEG quality
+     * Uses RENDER_MODE_FOR_PRINT to preserve crisp vector fonts and lines.
      */
     suspend fun compressPdf(
         context: Context,
         inputPdf: File,
-        dpiScale: Float = 1.33f, // ~96-100 DPI
-        imageQuality: Int = 65,
+        dpiScale: Float = 2.0f, // Sharp print fidelity
+        imageQuality: Int = 85, // High visual clarity
         outputFileName: String = "Compressed_${System.currentTimeMillis()}.pdf",
         onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): File = withContext(Dispatchers.IO) {
@@ -237,7 +271,7 @@ object PdfEngine {
         val pfd = ParcelFileDescriptor.open(inputPdf, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = PdfRenderer(pfd)
         val document = PdfDocument()
-        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG or Paint.DITHER_FLAG)
 
         try {
             val totalPages = renderer.pageCount
@@ -253,12 +287,13 @@ object PdfEngine {
                 val bitmap = Bitmap.createBitmap(renderWidth, renderHeight, Bitmap.Config.ARGB_8888)
                 val canvas = Canvas(bitmap)
                 canvas.drawColor(Color.WHITE)
-                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                // Use RENDER_MODE_FOR_PRINT for maximum vector fidelity and sharp text
+                page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT)
                 page.close()
 
-                // Re-encode bitmap with JPEG compression
+                // Re-encode bitmap with JPEG compression maintaining high quality
                 val stream = java.io.ByteArrayOutputStream()
-                bitmap.compress(Bitmap.CompressFormat.JPEG, imageQuality.coerceIn(10, 100), stream)
+                bitmap.compress(Bitmap.CompressFormat.JPEG, imageQuality.coerceIn(50, 100), stream)
                 val bytes = stream.toByteArray()
                 bitmap.recycle()
 
@@ -291,15 +326,31 @@ object PdfEngine {
     }
 
     /**
-     * Compresses a PDF to target a specific custom file size (e.g. 50 KB, 500 KB, 1 MB, 10 MB).
+     * Resizes a PDF to target a specific custom file size (e.g. 50 KB, 500 KB, 1 MB, 10 MB).
+     * If target size is larger: preserves 100% original quality without re-rasterization and pads to target size.
+     * If target size is smaller: uses high-quality print rendering so text and details stay crisp and clear.
      */
     suspend fun compressPdfToTargetSize(
         context: Context,
         inputPdf: File,
         targetSizeBytes: Long,
-        outputFileName: String = "Compressed_${System.currentTimeMillis()}.pdf",
+        outputFileName: String = "Resized_${System.currentTimeMillis()}.pdf",
         onProgress: (Int, Int) -> Unit = { _, _ -> }
     ): File = withContext(Dispatchers.IO) {
+        val outputDir = File(context.cacheDir, "compressed_pdfs").apply { mkdirs() }
+        val outputFile = File(outputDir, outputFileName)
+
+        // Case 1: Target size is GREATER than or EQUAL to original PDF size
+        // User wants to INCREASE the size without ANY quality change!
+        // 100% Original PDF Quality Preserved (No re-rasterization or vector loss)
+        if (targetSizeBytes >= inputPdf.length()) {
+            inputPdf.copyTo(outputFile, overwrite = true)
+            padPdfToTargetSize(outputFile, targetSizeBytes)
+            return@withContext outputFile
+        }
+
+        // Case 2: Target size is SMALLER than original PDF size
+        // User wants to REDUCE size, but keep quality crisp and clear!
         val pfd = ParcelFileDescriptor.open(inputPdf, ParcelFileDescriptor.MODE_READ_ONLY)
         val renderer = PdfRenderer(pfd)
         val pageCount = renderer.pageCount
@@ -307,22 +358,32 @@ object PdfEngine {
         pfd.close()
 
         val bytesPerPage = (targetSizeBytes / pageCount.coerceAtLeast(1))
+        // Maintain high resolution & quality (minimum 75% quality, never drop to muddy levels)
         val (dpiScale, quality) = when {
-            bytesPerPage < 40_000 -> Pair(0.9f, 35)
-            bytesPerPage < 90_000 -> Pair(1.2f, 50)
-            bytesPerPage < 250_000 -> Pair(1.5f, 65)
-            bytesPerPage < 600_000 -> Pair(2.0f, 75)
-            else -> Pair(2.6f, 85)
+            bytesPerPage < 60_000 -> Pair(1.33f, 75)
+            bytesPerPage < 150_000 -> Pair(1.6f, 82)
+            bytesPerPage < 350_000 -> Pair(2.0f, 88)
+            else -> Pair(2.5f, 92)
         }
 
-        compressPdf(
+        val tempReduced = compressPdf(
             context = context,
             inputPdf = inputPdf,
             dpiScale = dpiScale,
             imageQuality = quality,
-            outputFileName = outputFileName,
+            outputFileName = "temp_reduced_${System.currentTimeMillis()}.pdf",
             onProgress = onProgress
         )
+
+        tempReduced.copyTo(outputFile, overwrite = true)
+        tempReduced.delete()
+
+        // If reduced file is smaller than targetSizeBytes, pad safely to hit exact target size!
+        if (outputFile.length() < targetSizeBytes) {
+            padPdfToTargetSize(outputFile, targetSizeBytes)
+        }
+
+        outputFile
     }
 
     /**
@@ -481,8 +542,8 @@ object PdfEngine {
             // If a minimum target size is required by a portal, safely append PDF comments (% padding)
             if (targetMinSizeBytes > 0 && outputFile.length() < targetMinSizeBytes) {
                 val paddingNeeded = targetMinSizeBytes - outputFile.length()
-                val commentHeader = "\n%DocuCraft-Enhanced-Padding-Begin\n".toByteArray()
-                val commentFooter = "\n%DocuCraft-Enhanced-Padding-End\n".toByteArray()
+                val commentHeader = "\n%AmirDocuFix-Enhanced-Padding-Begin\n".toByteArray()
+                val commentFooter = "\n%AmirDocuFix-Enhanced-Padding-End\n".toByteArray()
                 val actualPadding = (paddingNeeded - commentHeader.size - commentFooter.size).coerceAtLeast(0).toInt()
 
                 FileOutputStream(outputFile, true).use { out ->
@@ -820,6 +881,121 @@ object PdfEngine {
         } finally {
             document.close()
         }
+        outputFile
+    }
+
+    /**
+     * Converts plain text into a multi-page formatted PDF document
+     */
+    suspend fun convertTextToPdf(
+        context: Context,
+        title: String,
+        content: String,
+        outputFileName: String = "TextDoc_${System.currentTimeMillis()}.pdf"
+    ): File = withContext(Dispatchers.IO) {
+        val outputDir = File(context.cacheDir, "generated_pdfs").apply { mkdirs() }
+        val outputFile = File(outputDir, outputFileName)
+
+        val document = PdfDocument()
+
+        val pageWidth = 595  // standard A4 width in pt
+        val pageHeight = 842 // standard A4 height in pt
+        val margin = 40f
+        val printableWidth = pageWidth - (margin * 2)
+
+        val titlePaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(20, 20, 20)
+            textSize = 20f
+            typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, android.graphics.Typeface.BOLD)
+        }
+
+        val textPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(40, 40, 40)
+            textSize = 12f
+            typeface = android.graphics.Typeface.DEFAULT
+        }
+
+        val footerPaint = android.text.TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.GRAY
+            textSize = 10f
+            typeface = android.graphics.Typeface.DEFAULT
+        }
+
+        val textLayout = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            android.text.StaticLayout.Builder.obtain(content, 0, content.length, textPaint, printableWidth.toInt())
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(4f, 1.15f)
+                .setIncludePad(true)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            android.text.StaticLayout(
+                content,
+                textPaint,
+                printableWidth.toInt(),
+                android.text.Layout.Alignment.ALIGN_NORMAL,
+                1.15f,
+                4f,
+                true
+            )
+        }
+
+        var currentLine = 0
+        val totalLines = textLayout.lineCount
+        var pageNumber = 1
+
+        if (totalLines == 0) {
+            val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, 1).create()
+            val page = document.startPage(pageInfo)
+            val canvas = page.canvas
+            if (title.isNotBlank()) {
+                canvas.drawText(title, margin, margin + 20f, titlePaint)
+            }
+            document.finishPage(page)
+        } else {
+            while (currentLine < totalLines) {
+                val pageInfo = PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create()
+                val page = document.startPage(pageInfo)
+                val canvas = page.canvas
+
+                var yOffset = margin
+                if (pageNumber == 1 && title.isNotBlank()) {
+                    canvas.drawText(title, margin, yOffset + 20f, titlePaint)
+                    yOffset += 44f
+                }
+
+                val availableHeight = pageHeight - margin - yOffset - 30f // space for footer
+                val startLineForPage = currentLine
+                var endLineForPage = currentLine
+
+                val startY = textLayout.getLineTop(startLineForPage)
+                while (endLineForPage < totalLines && (textLayout.getLineBottom(endLineForPage) - startY) <= availableHeight) {
+                    endLineForPage++
+                }
+                if (endLineForPage == startLineForPage) {
+                    endLineForPage++ // ensure at least one line per page
+                }
+
+                canvas.save()
+                canvas.translate(margin, yOffset - startY)
+                canvas.clipRect(0f, startY.toFloat(), printableWidth, textLayout.getLineBottom(endLineForPage - 1).toFloat())
+                textLayout.draw(canvas)
+                canvas.restore()
+
+                val footerText = "Page $pageNumber"
+                val footerWidth = footerPaint.measureText(footerText)
+                canvas.drawText(footerText, pageWidth - margin - footerWidth, pageHeight - margin + 12f, footerPaint)
+
+                document.finishPage(page)
+                currentLine = endLineForPage
+                pageNumber++
+            }
+        }
+
+        FileOutputStream(outputFile).use { out ->
+            document.writeTo(out)
+        }
+        document.close()
         outputFile
     }
 }

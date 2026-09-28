@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Button
@@ -45,6 +46,7 @@ import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,10 +57,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.example.ui.components.AppHeader
 import com.example.ui.components.ConversionResultCard
+import com.example.ui.components.PdfExportSecurityCard
 import com.example.ui.theme.PrimaryIndigo
 import com.example.ui.viewmodel.PdfUtilViewModel
 import com.example.utils.PdfEngine
@@ -76,6 +80,7 @@ fun JpgToPdfScreen(
     onBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val securityConfig by viewModel.jpgToPdfSecurityConfig.collectAsStateWithLifecycle()
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
@@ -91,8 +96,8 @@ fun JpgToPdfScreen(
             .testTag("jpg_to_pdf_screen")
     ) {
         AppHeader(
-            title = "JPG to PDF Converter",
-            subtitle = "Combine images into a customized PDF document",
+            title = "JPG to PDF",
+            subtitle = "Upload JPG images to convert into PDF",
             onBackClick = onBack,
             actions = {
                 if (selectedImages.isNotEmpty()) {
@@ -135,53 +140,28 @@ fun JpgToPdfScreen(
                         modifier = Modifier.padding(16.dp),
                         horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        Button(
+                            onClick = {
+                                photoPickerLauncher.launch(
+                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.SingleMimeType("image/jpeg"))
+                                )
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("btn_upload_jpg"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                         ) {
-                            Button(
-                                onClick = {
-                                    photoPickerLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("btn_pick_images"),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
-                            ) {
-                                Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Select Images")
-                            }
-
-                            OutlinedButton(
-                                onClick = { viewModel.loadSampleImagesForJpgToPdf() },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("btn_load_sample_images"),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = PrimaryIndigo)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Load Sample")
-                            }
+                            Icon(imageVector = Icons.Default.AddPhotoAlternate, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Upload JPG", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         }
 
-                        if (selectedImages.isEmpty()) {
-                            Spacer(modifier = Modifier.height(16.dp))
+                        if (selectedImages.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(10.dp))
                             Text(
-                                text = "Select images from device or load demo scans to begin",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "${selectedImages.size} image(s) selected",
+                                text = "${selectedImages.size} JPG image(s) selected",
                                 fontWeight = FontWeight.SemiBold,
                                 color = PrimaryIndigo,
                                 fontSize = 13.sp
@@ -231,7 +211,7 @@ fun JpgToPdfScreen(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "PDF Output Settings",
+                                    text = "Page Settings",
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
@@ -287,31 +267,26 @@ fun JpgToPdfScreen(
                                     )
                                 }
                             }
-
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Image Quality Slider
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Text("Image Compression Quality", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                Text("$quality%", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = PrimaryIndigo)
-                            }
-                            Slider(
-                                value = quality.toFloat(),
-                                onValueChange = { viewModel.setJpgToPdfQuality(it.toInt()) },
-                                valueRange = 40f..100f,
-                                modifier = Modifier.testTag("slider_jpg_quality")
-                            )
                         }
                     }
                 }
 
+                // Security / Password Protection for PDF Export
+                item {
+                    PdfExportSecurityCard(
+                        config = securityConfig,
+                        onConfigChange = { viewModel.setJpgToPdfSecurityConfig(it) },
+                        title = "PDF Export Security",
+                        subtitle = "Optional: Secure your converted PDF with password encryption"
+                    )
+                }
+
                 // Convert Button
                 item {
+                    val canExport = !securityConfig.isProtectionEnabled || securityConfig.isValid
                     Button(
                         onClick = { viewModel.convertImagesToPdf() },
+                        enabled = canExport,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(54.dp)
@@ -319,12 +294,29 @@ fun JpgToPdfScreen(
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = PrimaryIndigo)
                     ) {
-                        Icon(imageVector = Icons.Default.PictureAsPdf, contentDescription = null)
+                        Icon(
+                            imageVector = if (securityConfig.isProtectionEnabled) Icons.Default.Lock else Icons.Default.PictureAsPdf,
+                            contentDescription = null
+                        )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Convert to PDF (${selectedImages.size} Pages)",
+                            text = if (securityConfig.isProtectionEnabled) {
+                                "Convert & Encrypt PDF (${selectedImages.size} Pages)"
+                            } else {
+                                "Convert to PDF (${selectedImages.size} Pages)"
+                            },
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    if (securityConfig.isProtectionEnabled && !securityConfig.isValid) {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = securityConfig.errorMessage ?: "Please fix password errors above",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 12.sp,
+                            modifier = Modifier.padding(start = 4.dp)
                         )
                     }
                 }

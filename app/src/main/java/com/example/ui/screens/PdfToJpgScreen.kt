@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.FileOpen
 import androidx.compose.material.icons.filled.Image
@@ -43,6 +44,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -73,7 +75,7 @@ fun PdfToJpgScreen(
     selectedPdfFile: File?,
     pageThumbnails: List<Bitmap>,
     outputFormat: ImageEngine.OutputFormat,
-    dpiScale: Float,
+    dpiScale: Float = 4.167f,
     extractedImages: List<File>,
     onBack: () -> Unit
 ) {
@@ -93,8 +95,8 @@ fun PdfToJpgScreen(
             .testTag("pdf_to_jpg_screen")
     ) {
         AppHeader(
-            title = "PDF to JPG / PNG",
-            subtitle = "Convert PDF documents to image pages",
+            title = "PDF to JPG",
+            subtitle = "Upload PDF to convert pages into JPG",
             onBackClick = onBack
         )
 
@@ -113,36 +115,18 @@ fun PdfToJpgScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        Button(
+                            onClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(50.dp)
+                                .testTag("btn_upload_pdf"),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = AccentCoral)
                         ) {
-                            Button(
-                                onClick = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("btn_select_pdf"),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = ButtonDefaults.buttonColors(containerColor = AccentCoral)
-                            ) {
-                                Icon(imageVector = Icons.Default.Description, contentDescription = null)
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text("Select PDF")
-                            }
-
-                            OutlinedButton(
-                                onClick = { viewModel.loadSamplePdfForExtract() },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(48.dp)
-                                    .testTag("btn_load_sample_pdf"),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Icon(imageVector = Icons.Default.AutoAwesome, contentDescription = null, tint = AccentCoral)
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Load Sample")
-                            }
+                            Icon(imageVector = Icons.Default.Description, contentDescription = null)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Upload PDF", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         }
 
                         if (selectedPdfFile != null) {
@@ -257,7 +241,7 @@ fun PdfToJpgScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
                                 listOf(
-                                    ImageEngine.OutputFormat.JPEG to "JPG (Compact)",
+                                    ImageEngine.OutputFormat.JPEG to "JPG (100% Quality)",
                                     ImageEngine.OutputFormat.PNG to "PNG (Lossless)"
                                 ).forEach { (fmt, label) ->
                                     FilterChip(
@@ -268,23 +252,37 @@ fun PdfToJpgScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
 
-                            Text("Render Resolution (DPI)", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = SuccessGreen.copy(alpha = 0.12f),
+                                modifier = Modifier.fillMaxWidth()
                             ) {
-                                listOf(
-                                    1.0f to "72 DPI (Standard)",
-                                    2.0f to "144 DPI (High)",
-                                    3.0f to "216 DPI (Ultra)"
-                                ).forEach { (scale, label) ->
-                                    FilterChip(
-                                        selected = dpiScale == scale,
-                                        onClick = { viewModel.setPdfToJpgDpiScale(scale) },
-                                        label = { Text(label) }
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = SuccessGreen,
+                                        modifier = Modifier.size(20.dp)
                                     )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column {
+                                        Text(
+                                            text = "100% Original PDF Quality Preserved",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "Exact crystal-clear sharpness as the source PDF without blur or loss",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
                         }
