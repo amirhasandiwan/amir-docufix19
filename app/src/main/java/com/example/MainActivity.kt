@@ -47,6 +47,8 @@ import com.example.ui.screens.MergeSplitScreen
 import com.example.ui.screens.PdfToJpgScreen
 import com.example.ui.screens.SecurityScreen
 import com.example.ui.screens.TextToPdfScreen
+import com.example.ui.screens.BgRemoverScreen
+import com.example.ui.screens.OcrScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.AppDestination
 import com.example.ui.viewmodel.PdfUtilViewModel
@@ -264,6 +266,14 @@ fun ScreenSwitcher(
             onBack = { viewModel.navigateTo(AppDestination.HOME) }
         )
         AppDestination.TEXT_TO_PDF -> TextToPdfScreen(
+            viewModel = viewModel,
+            onBack = { viewModel.navigateTo(AppDestination.HOME) }
+        )
+        AppDestination.BG_REMOVER -> BgRemoverScreen(
+            viewModel = viewModel,
+            onBack = { viewModel.navigateTo(AppDestination.HOME) }
+        )
+        AppDestination.OCR -> OcrScreen(
             viewModel = viewModel,
             onBack = { viewModel.navigateTo(AppDestination.HOME) }
         )

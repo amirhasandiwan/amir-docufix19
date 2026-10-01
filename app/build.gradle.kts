@@ -99,6 +99,8 @@ dependencies {
   implementation(libs.androidx.room.runtime)
   implementation(libs.coil.compose)
   implementation(libs.pdfbox.android)
+  implementation("com.google.mlkit:segmentation-selfie:16.0.0-beta6")
+  implementation("com.google.mlkit:text-recognition:16.0.1")
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
   // Uncomment to use Firestore:

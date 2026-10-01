@@ -6,8 +6,10 @@ import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.model.PdfExportSecurityConfig
+import com.example.utils.BgRemovalEngine
 import com.example.utils.FileOpener
 import com.example.utils.ImageEngine
+import com.example.utils.OcrEngine
 import com.example.utils.PdfEngine
 import com.example.utils.SampleFilesProvider
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,7 +26,9 @@ enum class AppDestination {
     COMPRESSOR,
     MERGE_SPLIT,
     SECURITY,
-    TEXT_TO_PDF
+    TEXT_TO_PDF,
+    BG_REMOVER,
+    OCR
 }
 
 class PdfUtilViewModel(application: Application) : AndroidViewModel(application) {
@@ -1344,6 +1348,326 @@ class PdfUtilViewModel(application: Application) : AndroidViewModel(application)
                 _progressRatio.value = 0f
             }
         }
+    }
+
+    // ==========================================
+    // 9. PHOTO BACKGROUND REMOVER & COLOR CHANGER
+    // ==========================================
+    private val _bgSourceBitmap = MutableStateFlow<Bitmap?>(null)
+    val bgSourceBitmap: StateFlow<Bitmap?> = _bgSourceBitmap.asStateFlow()
+
+    private val _bgSegmentationResult = MutableStateFlow<BgRemovalEngine.SegmentationResult?>(null)
+    val bgSegmentationResult: StateFlow<BgRemovalEngine.SegmentationResult?> = _bgSegmentationResult.asStateFlow()
+
+    private val _bgPreviewBitmap = MutableStateFlow<Bitmap?>(null)
+    val bgPreviewBitmap: StateFlow<Bitmap?> = _bgPreviewBitmap.asStateFlow()
+
+    private val _bgSelectedColor = MutableStateFlow<Int?>(null) // null = transparent
+    val bgSelectedColor: StateFlow<Int?> = _bgSelectedColor.asStateFlow()
+
+    private val _bgCustomHexColor = MutableStateFlow("#3B82F6") // default blue
+    val bgCustomHexColor: StateFlow<String> = _bgCustomHexColor.asStateFlow()
+
+    private val _bgRemovalMode = MutableStateFlow(BgRemovalEngine.RemovalMode.AI_PORTRAIT)
+    val bgRemovalMode: StateFlow<BgRemovalEngine.RemovalMode> = _bgRemovalMode.asStateFlow()
+
+    private val _bgThreshold = MutableStateFlow(0.5f)
+    val bgThreshold: StateFlow<Float> = _bgThreshold.asStateFlow()
+
+    private val _bgTolerance = MutableStateFlow(0.22f)
+    val bgTolerance: StateFlow<Float> = _bgTolerance.asStateFlow()
+
+    private val _bgSavedFile = MutableStateFlow<File?>(null)
+    val bgSavedFile: StateFlow<File?> = _bgSavedFile.asStateFlow()
+
+    private val _isBgProcessing = MutableStateFlow(false)
+    val isBgProcessing: StateFlow<Boolean> = _isBgProcessing.asStateFlow()
+
+    fun selectImageForBgRemoval(uri: Uri) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Loading image..."
+            try {
+                val bitmap = ImageEngine.decodeBitmapFromUri(getApplication(), uri, maxDimension = 1920)
+                if (bitmap != null) {
+                    _bgSourceBitmap.value = bitmap
+                    _bgSavedFile.value = null
+                    _bgSelectedColor.value = null // start with transparent
+                    processBgRemovalInternal(bitmap)
+                } else {
+                    _statusNotification.value = "Failed to load image"
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error opening image: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun setBgRemovalMode(mode: BgRemovalEngine.RemovalMode) {
+        _bgRemovalMode.value = mode
+        val bitmap = _bgSourceBitmap.value ?: return
+        viewModelScope.launch {
+            processBgRemovalInternal(bitmap)
+        }
+    }
+
+    fun setBgThreshold(threshold: Float) {
+        _bgThreshold.value = threshold
+        applyCurrentBgColor()
+    }
+
+    fun setBgTolerance(tolerance: Float) {
+        _bgTolerance.value = tolerance
+        if (_bgRemovalMode.value == BgRemovalEngine.RemovalMode.COLOR_KEY) {
+            val bitmap = _bgSourceBitmap.value ?: return
+            viewModelScope.launch {
+                processBgRemovalInternal(bitmap)
+            }
+        }
+    }
+
+    fun setBgColor(color: Int?) {
+        _bgSelectedColor.value = color
+        applyCurrentBgColor()
+    }
+
+    fun setCustomHexColor(hex: String) {
+        _bgCustomHexColor.value = hex
+        try {
+            val cleanHex = if (hex.startsWith("#")) hex else "#$hex"
+            if (cleanHex.length == 7 || cleanHex.length == 9) {
+                val parsed = android.graphics.Color.parseColor(cleanHex)
+                setBgColor(parsed)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private suspend fun processBgRemovalInternal(bitmap: Bitmap) {
+        _isBgProcessing.value = true
+        _progressMessage.value = "Analyzing and removing background..."
+        try {
+            val seg = if (_bgRemovalMode.value == BgRemovalEngine.RemovalMode.AI_PORTRAIT) {
+                try {
+                    BgRemovalEngine.segmentAiPortrait(bitmap)
+                } catch (e: Exception) {
+                    // Fallback to color detection if AI portrait segmentation encounters issue
+                    BgRemovalEngine.segmentByColor(bitmap, tolerance = _bgTolerance.value)
+                }
+            } else {
+                BgRemovalEngine.segmentByColor(bitmap, tolerance = _bgTolerance.value)
+            }
+            _bgSegmentationResult.value = seg
+            val blended = BgRemovalEngine.applyBackground(
+                sourceBitmap = bitmap,
+                segmentation = seg,
+                bgColor = _bgSelectedColor.value,
+                threshold = _bgThreshold.value
+            )
+            _bgPreviewBitmap.value = blended
+            _statusNotification.value = "Background removed successfully!"
+        } catch (e: Exception) {
+            e.printStackTrace()
+            _statusNotification.value = "Error removing background: ${e.localizedMessage}"
+        } finally {
+            _isBgProcessing.value = false
+        }
+    }
+
+    private fun applyCurrentBgColor() {
+        val bitmap = _bgSourceBitmap.value ?: return
+        val seg = _bgSegmentationResult.value ?: return
+        viewModelScope.launch {
+            val blended = BgRemovalEngine.applyBackground(
+                sourceBitmap = bitmap,
+                segmentation = seg,
+                bgColor = _bgSelectedColor.value,
+                threshold = _bgThreshold.value
+            )
+            _bgPreviewBitmap.value = blended
+        }
+    }
+
+    fun saveBgRemovedPhoto(isPng: Boolean) {
+        val bitmap = _bgPreviewBitmap.value ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Saving photo..."
+            try {
+                val file = BgRemovalEngine.saveBitmapToFile(
+                    context = getApplication(),
+                    bitmap = bitmap,
+                    isPng = isPng
+                )
+                _bgSavedFile.value = file
+                _statusNotification.value = "Saved ${file.name} (${ImageEngine.formatFileSize(file.length())})"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error saving photo: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun clearBgRemoval() {
+        _bgSourceBitmap.value = null
+        _bgSegmentationResult.value = null
+        _bgPreviewBitmap.value = null
+        _bgSelectedColor.value = null
+        _bgSavedFile.value = null
+    }
+
+    // ==========================================
+    // 10. OCR (TEXT EXTRACTION & SEARCHABLE PDF)
+    // ==========================================
+    private val _ocrSourceBitmap = MutableStateFlow<Bitmap?>(null)
+    val ocrSourceBitmap: StateFlow<Bitmap?> = _ocrSourceBitmap.asStateFlow()
+
+    private val _ocrExtractedText = MutableStateFlow<String>("")
+    val ocrExtractedText: StateFlow<String> = _ocrExtractedText.asStateFlow()
+
+    private val _ocrResultData = MutableStateFlow<OcrEngine.OcrResult?>(null)
+    val ocrResultData: StateFlow<OcrEngine.OcrResult?> = _ocrResultData.asStateFlow()
+
+    private val _isOcrScanning = MutableStateFlow<Boolean>(false)
+    val isOcrScanning: StateFlow<Boolean> = _isOcrScanning.asStateFlow()
+
+    private val _ocrExportedFile = MutableStateFlow<File?>(null)
+    val ocrExportedFile: StateFlow<File?> = _ocrExportedFile.asStateFlow()
+
+    private val _ocrExportType = MutableStateFlow<String>("")
+    val ocrExportType: StateFlow<String> = _ocrExportType.asStateFlow()
+
+    fun updateOcrExtractedText(text: String) {
+        _ocrExtractedText.value = text
+    }
+
+    fun selectImageForOcr(uri: Uri) {
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Loading image for OCR..."
+            _ocrExportedFile.value = null
+            try {
+                val bitmap = ImageEngine.decodeBitmapFromUri(getApplication(), uri, maxDimension = 2400)
+                if (bitmap != null) {
+                    _ocrSourceBitmap.value = bitmap
+                    runOcrScanInternal(bitmap)
+                } else {
+                    _statusNotification.value = "Failed to load image"
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error opening image: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    private suspend fun runOcrScanInternal(bitmap: Bitmap) {
+        _isOcrScanning.value = true
+        _progressMessage.value = "Scanning text with ML Kit OCR..."
+        try {
+            val result = OcrEngine.recognizeText(bitmap)
+            _ocrResultData.value = result
+            _ocrExtractedText.value = result.fullText
+            val wordCount = if (result.fullText.isBlank()) 0 else result.fullText.trim().split(Regex("\\s+")).size
+            _statusNotification.value = "Extracted $wordCount words successfully!"
+        } catch (e: Exception) {
+            e.printStackTrace()
+            _statusNotification.value = "OCR scanning error: ${e.localizedMessage}"
+        } finally {
+            _isOcrScanning.value = false
+        }
+    }
+
+    fun exportSearchablePdf() {
+        val bitmap = _ocrSourceBitmap.value ?: return
+        val ocrData = _ocrResultData.value ?: return
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Generating Searchable PDF with invisible text layer..."
+            try {
+                val file = OcrEngine.createSearchablePdf(
+                    context = getApplication(),
+                    sourceBitmap = bitmap,
+                    ocrResult = ocrData
+                )
+                _ocrExportedFile.value = file
+                _ocrExportType.value = "Searchable PDF (Image Overlay)"
+                _statusNotification.value = "Searchable PDF created: ${file.name}"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error creating Searchable PDF: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun exportCleanDocumentPdf() {
+        val text = _ocrExtractedText.value
+        if (text.isBlank()) {
+            _statusNotification.value = "No text to export"
+            return
+        }
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Generating Clean Document PDF..."
+            try {
+                val file = PdfEngine.convertTextToPdf(
+                    context = getApplication(),
+                    title = "OCR Extracted Document",
+                    content = text,
+                    outputFileName = "OCR_Doc_${System.currentTimeMillis()}.pdf"
+                )
+                _ocrExportedFile.value = file
+                _ocrExportType.value = "Clean Document PDF"
+                _statusNotification.value = "Document PDF created: ${file.name}"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error creating PDF: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun exportTextFile() {
+        val text = _ocrExtractedText.value
+        if (text.isBlank()) {
+            _statusNotification.value = "No text to export"
+            return
+        }
+        viewModelScope.launch {
+            _isLoading.value = true
+            _progressMessage.value = "Saving text file..."
+            try {
+                val file = OcrEngine.saveExtractedTextFile(
+                    context = getApplication(),
+                    text = text
+                )
+                _ocrExportedFile.value = file
+                _ocrExportType.value = "Text File (.txt)"
+                _statusNotification.value = "Text file saved: ${file.name}"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _statusNotification.value = "Error saving text file: ${e.localizedMessage}"
+            } finally {
+                _isLoading.value = false
+            }
+        }
+    }
+
+    fun clearOcr() {
+        _ocrSourceBitmap.value = null
+        _ocrExtractedText.value = ""
+        _ocrResultData.value = null
+        _ocrExportedFile.value = null
+        _ocrExportType.value = ""
     }
 
     // Helper: copy content uri to temp file

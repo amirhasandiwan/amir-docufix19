@@ -24,6 +24,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CallMerge
 import androidx.compose.material.icons.filled.Compress
+import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Lock
@@ -115,11 +116,11 @@ fun HomeScreen(
                                 fontWeight = FontWeight.ExtraBold
                             )
                             Text(
-                                text = "AMIR HASAN DIWAN",
+                                text = "Created by Amir Hasan Diwan",
                                 color = Color(0xFFBFDBFE),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 1.sp
+                                letterSpacing = 0.5.sp
                             )
                         }
 
@@ -217,6 +218,34 @@ fun HomeScreen(
                 bgColor = Color(0xFFF5F3FF),
                 testTag = "card_text_to_pdf",
                 onClick = { onNavigate(AppDestination.TEXT_TO_PDF) }
+            )
+        }
+
+        // Utility: Photo BG Remover & Color Changer
+        item {
+            FeatureCard(
+                title = "Photo BG Remover & Color",
+                description = "Photo upload karke uska background remove karein aur koi bhi custom color choose karein.",
+                badgeText = "Remove & Color BG",
+                icon = Icons.Default.AutoAwesome,
+                accentColor = Color(0xFFE11D48),
+                bgColor = Color(0xFFFFF1F2),
+                testTag = "card_bg_remover",
+                onClick = { onNavigate(AppDestination.BG_REMOVER) }
+            )
+        }
+
+        // Utility: OCR Text Extractor & Searchable PDF
+        item {
+            FeatureCard(
+                title = "OCR Text Extractor",
+                description = "Image se text extract karein aur Searchable PDF ya text file (.txt) me save karein.",
+                badgeText = "Searchable PDF & OCR",
+                icon = Icons.Default.DocumentScanner,
+                accentColor = Color(0xFF0284C7),
+                bgColor = Color(0xFFF0F9FF),
+                testTag = "card_ocr",
+                onClick = { onNavigate(AppDestination.OCR) }
             )
         }
 
