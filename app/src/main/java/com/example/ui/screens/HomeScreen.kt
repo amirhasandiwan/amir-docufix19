@@ -116,11 +116,11 @@ fun HomeScreen(
                                 fontWeight = FontWeight.ExtraBold
                             )
                             Text(
-                                text = "Created by Amir Hasan Diwan",
+                                text = "AMIR HASAN DIWAN",
                                 color = Color(0xFFBFDBFE),
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.SemiBold,
-                                letterSpacing = 0.5.sp
+                                letterSpacing = 1.sp
                             )
                         }
 
