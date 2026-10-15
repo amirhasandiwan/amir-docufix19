@@ -16,6 +16,15 @@
 # debugging stack traces.
 #-keepattributes SourceFile,LineNumberTable
 
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# ML Kit rules
+-keep class com.google.mlkit.** { *; }
+-keep interface com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**
+
+# PdfBox Android
+-keep class com.tom_roush.pdfbox.** { *; }
+-dontwarn com.tom_roush.pdfbox.**
+
+# Coil Image Loader
+-keep class coil.** { *; }
+-dontwarn coil.**
